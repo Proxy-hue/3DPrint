@@ -19,7 +19,7 @@
 1. Склонируйте репозиторий:
 
 ```bash
-git clone https://github.com/<You>/3DPrint.git
+git https://github.com/Proxy-hue/3DPrint.git
 cd 3DPrint
 ```
 
@@ -67,14 +67,14 @@ docker compose down
 
 ### Процесс разработки
 
-1. Переключитесь на develop и стяните последние изменения:
+1. Переключитесь на `develop` и стяните последние изменения:
 
 ```bash
 git checkout develop
 git pull origin develop
 ```
 
-2. Создайте ветку под свою задачу от develop:
+2. Создайте ветку под свою задачу от `develop`:
 
 ```bash
 git checkout -b feature/название-вашей-фичи
