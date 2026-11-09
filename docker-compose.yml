@@ -1,7 +1,4 @@
-version: '3.8'
-
 services:
-  # База данных
   db:
     image: postgres:16-alpine
     container_name: 3dprint_db
@@ -15,7 +12,6 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
 
-  # Redis (для кэша и очередей django-rq)
   redis:
     image: redis:7-alpine
     container_name: 3dprint_redis
@@ -23,9 +19,8 @@ services:
       - "6379:6379"
     restart: unless-stopped
 
-  # MinIO (S3-хранилище для 3D-моделей)
   minio:
-    image: minio/minio:latest
+    image: pgsty/silo:latest
     container_name: 3dprint_minio
     command: server /data --console-address ":9001"
     environment:
