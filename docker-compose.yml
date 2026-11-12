@@ -12,7 +12,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -43,13 +43,13 @@ services:
       - minio_data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      test: ["CMD", "silo", "healthcheck", "ready"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   mailpit:
-    image: axllent/mailpit
+    image: axllent/mailpit:v1.20
     container_name: 3dprint_mailpit
     ports:
       - "8025:8025" # Веб-интерфейс
@@ -57,6 +57,7 @@ services:
     restart: unless-stopped
 
   backend:
+    image: 3dprint_backend
     build: ./backend
     container_name: 3dprint_backend
     command: python manage.py runserver 0.0.0.0:8000
@@ -83,6 +84,8 @@ services:
     env_file:
       - .env
     depends_on:
+      backend:
+        condition: service_started
       redis:
         condition: service_healthy
       db:
