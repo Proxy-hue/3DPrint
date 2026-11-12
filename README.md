@@ -3,11 +3,11 @@
 Система заказа 3D-печати. 
 
 **Технологический стек**:
-- Python (Django REST Framework)
-- React (TypeScript)
+- Python 3.12 (Django 5, DRF)
+- React 18 (TypeScript, Vite)
 - PostgreSQL 16
 - Redis 7
-- MinIO (S3)
+- MinIO / SILO (S3)
 
 ## 📋 Предварительные требования
 Перед началом работы убедитесь, что у вас установлены:
@@ -16,10 +16,10 @@
 
 ## 🚀 Как запустить локально
 
-1. Склонируйте репозиторий:
+1. Склонируйте репозиторий и перейдите в папку проекта:
 
 ```bash
-git https://github.com/Proxy-hue/3DPrint.git
+git clone https://github.com/Proxy-hue/3DPrint.git
 cd 3DPrint
 ```
 
@@ -31,23 +31,41 @@ cp .env.example .env
 
 *(Файл `.env` содержит локальные пароли и не попадает в Git. Если на Windows команда `cp` не работает, просто скопируйте файл вручную и переименуйте).*
 
-3. Запустите инфраструктуру в фоне:
+3. Запустите инфраструктуру (при первом запуске скачаются зависимости и соберутся контейнеры):
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
-4. **Проверка**: Убедитесь, что все контейнеры запустились (статус `Up` или `Running`):
+4. Проверка: убедитесь, что все контейнеры запустились (статус `Up` или `Running`):
 
 ```bash
 docker ps
 ```
 
+5. Первичная настройка базы данных и хранилища:
+Выполните эти команды один раз, чтобы применить миграции БД и создать бакет для файлов:
+
+```bash
+# Применяем миграции Django
+docker compose exec backend python manage.py migrate
+
+# Создаем суперпользователя для админки (придумайте логин/пароль)
+docker compose exec backend python manage.py createsuperuser
+
+# Устанавливаем boto3 (если не установлен) и создаем бакет в S3
+pip install boto3
+python scripts/init_s3.py
+```
+
 ## 🔗 Доступные сервисы после запуска:
-- **PostgreSQL (БД)**: `localhost:5432` (Данные для входа в `.env`)
-- **MinIO (Хранилище 3D-моделей)**: http://localhost:9001
-    - *Логин*: `minioadmin`
-    - *Пароль*: `minioadmin`
+- Frontend (React): http://localhost:5173
+- Backend (Django API): http://localhost:8000
+- Админка Django: http://localhost:8000/admin
+- PostgreSQL (БД): localhost:5432 (Данные для входа в .env)
+- S3-хранилище (SILO/MinIO): http://localhost:9001
+    - Логин: minioadmin
+    - Пароль: minioadmin
 
 ## 🛑 Как остановить
 Остановить контейнеры (данные сохранятся):
@@ -102,6 +120,8 @@ git push origin feature/название-вашей-фичи
 3DPrint/
 ├── backend/            # Django-проект (API, бизнес-логика)
 ├── frontend/           # React-приложение (Клиентский портал, АРМ менеджера)
+├── scripts/            # Вспомогательные скрипты (init_s3.py)
+├── .github/workflows/  # CI пайплайны (GitHub Actions)
 ├── .env.example        # Шаблон переменных окружения
 ├── .gitignore          # Исключения для Git
 ├── docker-compose.yml  # Конфигурация локальной инфраструктуры
