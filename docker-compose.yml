@@ -36,3 +36,28 @@ services:
 volumes:
   postgres_data:
   minio_data:
+
+# Заготовка для бэкенда (раскомментировать, когда появится папка backend/Dockerfile)
+# backend:
+#   build: ./backend
+#   container_name: 3dprint_backend
+#   command: python manage.py runserver 0.0.0.0:8000
+#   volumes:
+#     - ./backend:/app
+#   ports:
+#     - "8000:8000"
+#   env_file:
+#     - .env
+#   depends_on:
+#     - db
+#     - redis
+
+# Заготовка для фронтенда (раскомментировать, когда появится папка frontend/Dockerfile)
+# frontend:
+#   build: ./frontend
+#   container_name: 3dprint_frontend
+#   ports:
+#     - "5173:5173"
+#   volumes:
+#     - ./frontend:/app
+#     - /app/node_modules
