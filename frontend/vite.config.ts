@@ -6,14 +6,17 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+    watch: {
+      usePolling: true, // IMPORTANT for Windows (HMR in Docker)
+    },
     proxy: {
       '/api': {
         target: 'http://backend:8000', // Within a Docker network, we refer to the service name.
-        changeOrigin: true,
+        changeOrigin: false,
       },
       '/admin': {
         target: 'http://backend:8000',
-        changeOrigin: true,
+        changeOrigin: false,
       }
     }
   }
