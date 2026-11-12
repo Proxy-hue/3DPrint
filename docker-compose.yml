@@ -75,7 +75,7 @@ services:
         condition: service_healthy
 
   worker:
-    build: ./backend
+    image: 3dprint_backend
     container_name: 3dprint_worker
     command: python manage.py rqworker default
     volumes:
