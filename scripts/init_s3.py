@@ -3,10 +3,10 @@ import boto3
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 def create_bucket():
-    s3_endpoint = os.getenv("AWS_S3_ENDPOINT_URL", "http://localhost:9000")
-    access_key = os.getenv("AWS_ACCESS_KEY_ID", "minioadmin")
-    secret_key = os.getenv("AWS_SECRET_ACCESS_KEY", "minioadmin")
-    bucket_name = os.getenv("AWS_STORAGE_BUCKET_NAME", "3dprint-models")
+    s3_endpoint = os.getenv("MINIO_ENDPOINT", "http://localhost:9000")
+    access_key = os.getenv("MINIO_ROOT_USER", "minioadmin")
+    secret_key = os.getenv("MINIO_ROOT_PASSWORD", "minioadmin")
+    bucket_name = os.getenv("MINIO_BUCKET_NAME", "3dprint-models")
 
     print(f"Connecting to S3 at {s3_endpoint}...")
     
@@ -30,8 +30,8 @@ def create_bucket():
         exit(1)
         
     except ClientError as e:
-        error_code = int(e.response['Error']['Code'])
-        if error_code == 404:
+        error_code = e.response['Error']['Code']
+        if error_code == '404' or error_code == 'NoSuchBucket':
             print(f"Bucket '{bucket_name}' not found. Creating...")
             try:
                 s3_client.create_bucket(Bucket=bucket_name)
