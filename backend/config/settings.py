@@ -26,7 +26,7 @@ if not SECRET_KEY and not DEBUG:
 
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,backend').split(',')
-CSRF_TRUSTED_ORIGINS = ['http://localhost:5173']
+CSRF_TRUSTED_ORIGINS = os.getenv('CSRF_TRUSTED_ORIGINS', 'http://localhost:5173').split(',')
 
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -37,7 +37,6 @@ EMAIL_USE_TLS = False
 AUTH_USER_MODEL = 'users.User'
 
 # Application definition
-
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -98,7 +97,6 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 
 # Database (PostgreSQL from Docker)
-
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
