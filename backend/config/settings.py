@@ -24,13 +24,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-unsafe')
+SECRET_KEY = os.getenv('SECRET_KEY')
+if not SECRET_KEY and not DEBUG:
+    raise ValueError("The SECRET_KEY environment variable is not set!")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = os.getenv('DEBUG', 'False').lower() == 'true'
 
-ALLOWED_HOSTS = ['*'] if DEBUG else []
+ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 
+AUTH_USER_MODEL = 'users.User'
 
 # Application definition
 
@@ -57,6 +60,8 @@ INSTALLED_APPS = [
     'scheduling.apps.SchedulingConfig',
     'users.apps.UsersConfig',
     'validation.apps.ValidationConfig',
+
+    'drf_spectacular',
 ]
 
 MIDDLEWARE = [
@@ -143,14 +148,21 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# Настройки CORS (для фронтенда)
-CORS_ALLOW_ALL_ORIGINS = True # В продакшене нужно ограничить
-
-# Email
-# https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
-
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
+REST_FRAMEWORK = {
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework.authentication.SessionAuthentication',
+    ),
 }
+
+# Настройки Django-RQ (Redis Queue)
+RQ_QUEUES = {
+    'default': {
+        'HOST': os.getenv('REDIS_HOST', 'redis'),
+        'PORT': os.getenv('REDIS_PORT', 6379),
+        'DB': 0,
+    }
+}
+
+# Настройки почты (для уведомлений)
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend' # Временно в консоль
