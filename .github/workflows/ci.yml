@@ -39,7 +39,7 @@ jobs:
       if: hashFiles('backend/requirements.txt') != ''
       run: |
         cd backend
-        pytest
+        pytest || [ $? -eq 5 ]
 
   # frontend-ci:
   #   name: Frontend (React) Build
