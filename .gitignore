@@ -1,5 +1,7 @@
 .env
 node_modules/
+settings.json
+.flake8
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
