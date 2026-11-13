@@ -1,6 +1,9 @@
 import uuid
 from django.db import models
-from django.contrib.auth.models import AbstractUser, Group, Permission, UserManager as BaseUserManager
+from django.contrib.auth.models import (
+    AbstractUser, Group, Permission,
+    UserManager as BaseUserManager
+)
 
 
 class UserManager(BaseUserManager):
@@ -27,7 +30,11 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractUser):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid.uuid4,
+        editable=False
+    )
     username = None
     email = models.EmailField(unique=True)
     role = models.CharField(max_length=20, default='CLIENT')
@@ -51,7 +58,7 @@ class User(AbstractUser):
         related_query_name="custom_user",
     )
 
-    objects = UserManager() 
+    objects = UserManager()
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = []
