@@ -5,15 +5,20 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Creating a non-root user
+# Creating a user
 RUN useradd -m appuser
 
+# Build argument: install only production dependencies by default
+ARG INSTALL_DEV=false
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements-dev.txt .
+
+# If INSTALL_DEV=true, we install test libraries, otherwise only development
+RUN if [ "$INSTALL_DEV" = "true" ] ; then pip install --no-cache-dir -r requirements-dev.txt ; else pip install --no-cache-dir -r requirements.txt ; fi
 
 COPY . .
 
-# Change the file owner and switch to the new user
 RUN chown -R appuser:appuser /app
 USER appuser
 
