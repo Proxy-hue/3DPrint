@@ -2,11 +2,12 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from .models import User
 
+
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     ordering = ['email']
     list_display = ['email', 'role', 'is_staff']
-    
+
     # Переопределяем fieldsets, так как у нас нет username
     fieldsets = (
         (None, {'fields': ('email', 'password')}),
@@ -18,7 +19,7 @@ class UserAdmin(BaseUserAdmin):
                                     'groups',
                                     'user_permissions')}),
     )
-    
+
     add_fieldsets = (
         (None, {
             'classes': ('wide',),

@@ -58,7 +58,10 @@ services:
 
   backend:
     image: 3dprint_backend
-    build: ./backend
+    build: 
+      context: ./backend
+      args:
+        - INSTALL_DEV=true
     container_name: 3dprint_backend
     command: python manage.py runserver 0.0.0.0:8000
     volumes:
