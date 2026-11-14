@@ -1,35 +1,86 @@
-import { useState, useRef, type ChangeEvent, type DragEvent } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  Boxes, Check, CheckCircle2, Clock3, FileBox, FileUp, Plus, ShieldCheck, ArrowRight, ArrowDownToLine, Gauge
-} from 'lucide-react';
-import { Badge, Button, Card, Select, Spinner, cn } from '../../components/ui';
+import { Boxes, Check, CheckCircle2, FileBox, FileUp, Plus, ArrowRight } from 'lucide-react';
+import { Button, Card, Select, Spinner, cn } from '../../components/ui';
 
-// --- МОКОВЫЕ ДАННЫЕ (Позже заменим на fetch к Django API) ---
-const materials = [
-  { id: 'pla', name: 'PLA', description: 'Экологичный пластик для базовых моделей', technology: 'FDM', density: 1.24, pricePerGram: 3.0, colors: ['#ffffff', '#000000', '#ff0000'], colorNames: ['Белый', 'Черный', 'Красный'] },
-  { id: 'abs', name: 'ABS', description: 'Прочный и термостойкий пластик', technology: 'FDM', density: 1.04, pricePerGram: 3.5, colors: ['#ffffff', '#000000'], colorNames: ['Белый', 'Черный'] },
-  { id: 'resin', name: 'Смола', description: 'Высокая детализация', technology: 'SLA', density: 1.10, pricePerGram: 8.0, colors: ['#cccccc'], colorNames: ['Серый'] },
-];
+function MaterialCard({ material, isActive, onClick }: { material: any, isActive: boolean, onClick: () => void }) {
+  return (
+    <button onClick={onClick} className={cn('flex flex-col rounded-xl border p-4 text-left transition', isActive ? 'border-accent bg-accent/5' : 'border-line bg-app-bg hover:border-muted')}>
+      <span className="flex w-full items-center justify-between">
+        <span className="text-lg font-extrabold">{material.name}</span>
+        {isActive && <Check size={16} className="text-accent" />}
+      </span>
+      <span className="mt-2 text-xs text-muted">Технология: {material.technology}</span>
+      <span className="mt-auto pt-4 text-xs font-mono text-accent-light">{Number(material.price_per_gram).toLocaleString('ru-RU')} ₽/г</span>
+    </button>
+  );
+}
+
+function PriceCard({ price, days, disabled }: { price: number, days: number, disabled: boolean }) {
+  const formatPrice = (val: number) => `${new Intl.NumberFormat('ru-RU').format(val)} ₽`;
+  return (
+    <Card className="price-card">
+      <div><p className="eyebrow">ВАША СМЕТА</p><h2 className="section-title">Стоимость</h2></div>
+      <div className="space-y-4 border-y border-line py-5">
+        <div className="flex justify-between text-sm"><span className="text-muted">Материал</span><span className="font-mono">{formatPrice(price * 0.3)}</span></div>
+        <div className="flex justify-between text-sm"><span className="text-muted">Печать</span><span className="font-mono">{formatPrice(price * 0.7)}</span></div>
+      </div>
+      <div>
+        <p className="text-xs font-semibold text-muted">Итого</p>
+        <p className="mt-1 font-mono text-4xl font-semibold">{formatPrice(price)}</p>
+        <p className="mt-2 text-xs text-muted">Ориентировочно: {days} дня</p>
+      </div>
+      <Button variant="primary" className="w-full mt-4" disabled={disabled}>
+        <ArrowRight size={17} /> Оформить заказ
+      </Button>
+    </Card>
+  );
+}
 
 export default function ClientHome() {
-  // Состояние для настройки (пока локальное)
+  const [materials, setMaterials] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
   const [configuration, setConfiguration] = useState({
-    material: 'pla',
+    material: '',
     technology: 'FDM',
-    color: '#ffffff',
     layerHeight: 0.2,
-    infill: 20,
     quantity: 1,
     dimensions: { x: 62, y: 40, z: 28 }
   });
+  
   const [model, setModel] = useState<{name: string, size: number, format: string} | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Загрузка материалов из Django
+  useEffect(() => {
+    fetch('/api/catalog/materials/')
+      .then((res) => { if (!res.ok) throw new Error('Ошибка'); return res.json(); })
+      .then((data) => {
+        const loadedMaterials = data.results || data;
+        setMaterials(loadedMaterials);
+        if (loadedMaterials.length > 0) {
+          setConfiguration(prev => ({ ...prev, material: loadedMaterials[0].id, technology: loadedMaterials[0].technology }));
+        }
+        setIsLoading(false);
+      })
+      .catch((err) => {
+        console.error(err);
+        setError('Не удалось загрузить материалы из базы данных.');
+        setIsLoading(false);
+      });
+  }, []);
+
+  if (isLoading) return <div className="p-10 text-center">Загрузка справочников из БД...</div>;
+  if (error) return <div className="p-10 text-center text-red-500">{error}</div>;
+  if (materials.length === 0) return <div className="p-10 text-center">В базе нет материалов. Добавьте их в админке Django.</div>;
+
   const activeMaterial = materials.find(m => m.id === configuration.material) || materials[0];
 
+  // Имитация загрузки файла (позже заменим на реальный POST запрос в MinIO)
   function handleFile(file: File) {
     setIsUploading(true);
     setTimeout(() => {
@@ -39,7 +90,6 @@ export default function ClientHome() {
   }
 
   const formatSize = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
-  const formatPrice = (val: number) => `${new Intl.NumberFormat('ru-RU').format(val)} ₽`;
 
   return (
     <div className="app-shell min-h-screen">
@@ -55,7 +105,6 @@ export default function ClientHome() {
 
       <main className="main-content" style={{ marginLeft: 0 }}>
         <div className="page-stack">
-          
           <div className="flex flex-wrap items-end justify-between gap-4">
             <div><p className="eyebrow">КЛИЕНТСКИЙ ПОРТАЛ</p><h1 className="mt-2 text-3xl font-extrabold tracking-tight sm:text-[34px]">Новый заказ на печать</h1><p className="mt-2 text-sm text-muted">Настройте параметры модели — стоимость и сроки обновятся автоматически.</p></div>
           </div>
@@ -95,11 +144,12 @@ export default function ClientHome() {
                 <div><p className="eyebrow">02 / ПАРАМЕТРЫ ПЕЧАТИ</p><h2 className="section-title">Материал и технология</h2></div>
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                   {materials.map((m) => (
-                    <button key={m.id} onClick={() => setConfiguration({...configuration, material: m.id, technology: m.technology, color: m.colors[0]})} className={cn('flex flex-col rounded-xl border p-4 text-left transition', configuration.material === m.id ? 'border-accent bg-accent/5' : 'border-line bg-app-bg')}>
-                      <span className="flex w-full items-center justify-between"><span className="text-lg font-extrabold">{m.name}</span>{configuration.material === m.id && <Check size={16} className="text-accent" />}</span>
-                      <span className="mt-2 text-xs text-muted">{m.description}</span>
-                      <span className="mt-auto pt-4 text-xs font-mono text-accent-light">{m.pricePerGram} ₽/г</span>
-                    </button>
+                    <MaterialCard 
+                      key={m.id} 
+                      material={m} 
+                      isActive={configuration.material === m.id} 
+                      onClick={() => setConfiguration({...configuration, material: m.id, technology: m.technology})} 
+                    />
                   ))}
                 </div>
                 
@@ -119,21 +169,11 @@ export default function ClientHome() {
             </div>
 
             {/* --- КАРТОЧКА ЦЕНЫ --- */}
-            <Card className="price-card">
-              <div><p className="eyebrow">ВАША СМЕТА</p><h2 className="section-title">Стоимость</h2></div>
-              <div className="space-y-4 border-y border-line py-5">
-                <div className="flex justify-between text-sm"><span className="text-muted">Материал</span><span className="font-mono">{formatPrice(150)}</span></div>
-                <div className="flex justify-between text-sm"><span className="text-muted">Печать</span><span className="font-mono">{formatPrice(300)}</span></div>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-muted">Итого</p>
-                <p className="mt-1 font-mono text-4xl font-semibold">{formatPrice(450)}</p>
-                <p className="mt-2 text-xs text-muted">Ориентировочно: 3 дня</p>
-              </div>
-              <Button variant="primary" className="w-full mt-4" disabled={!model}>
-                <ArrowRight size={17} /> Оформить заказ
-              </Button>
-            </Card>
+            <PriceCard 
+              price={activeMaterial.price_per_gram * configuration.dimensions.x * configuration.quantity * 0.1 + 300} // Временная формула
+              days={3} 
+              disabled={!model} 
+            />
           </div>
         </div>
       </main>
