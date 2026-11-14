@@ -1,8 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import {
-  BadgeCheck, ChevronDown, CircleHelp, Clock3, FileCheck2, Gauge, ArrowRight
-} from 'lucide-react';
+import { BadgeCheck, Clock3, FileCheck2, Gauge, ArrowRight} from 'lucide-react';
 import { Button, Card, Select, Spinner, cn } from '../../components/ui';
 
 
