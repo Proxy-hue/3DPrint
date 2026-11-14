@@ -10,7 +10,7 @@ function MaterialCard({ material, isActive, onClick }: { material: any, isActive
         <span className="text-lg font-extrabold">{material.name}</span>
         {isActive && <Check size={16} className="text-accent" />}
       </span>
-      <span className="mt-2 text-xs text-muted">Технология: {material.technology}</span>
+      <span className="mt-2 text-xs text-muted">Технология: {material.technology_name}</span>
       <span className="mt-auto pt-4 text-xs font-mono text-accent-light">{Number(material.price_per_gram).toLocaleString('ru-RU')} ₽/г</span>
     </button>
   );
