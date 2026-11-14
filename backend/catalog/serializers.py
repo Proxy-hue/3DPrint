@@ -24,9 +24,15 @@ class QualityProfileSerializer(serializers.ModelSerializer):
 
 
 class MaterialSerializer(serializers.ModelSerializer):
+    technology_name = serializers.CharField(
+        source='technology.name',
+        read_only=True
+    )
+
     class Meta:
         model = Material
-        fields = ['id', 'name', 'density', 'price_per_gram', 'technology']
+        fields = ['id', 'name', 'density', 'price_per_gram', 'technology',
+                  'technology_name']
 
 
 class ColorSerializer(serializers.ModelSerializer):
@@ -38,5 +44,5 @@ class ColorSerializer(serializers.ModelSerializer):
 class PrinterSerializer(serializers.ModelSerializer):
     class Meta:
         model = Printer
-        fields = ['id', 'name', 'Workshop', 'technology', 'max_x', 'max_y',
+        fields = ['id', 'name', 'workshop', 'technology', 'max_x', 'max_y',
                   'max_z', 'status']
