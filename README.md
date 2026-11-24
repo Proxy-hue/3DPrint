@@ -44,6 +44,11 @@ docker ps
 ```
 
 ## 🔗 Доступные сервисы после запуска:
+- **Django REST API**: `http://localhost:8000`
+- **Админка Django**: `http://localhost:8000/admin`
+- **Пользователи**: `http://localhost:8000/api/users/`
+- **3D-модели**: `http://localhost:8000/api/models/`
+- **Валидация 3D-моделей**: `http://localhost:8000/api/validation/validate/`
 - **PostgreSQL (БД)**: `localhost:5432` (Данные для входа в `.env`)
 - **MinIO (Хранилище 3D-моделей)**: http://localhost:9001
     - *Логин*: `minioadmin`
