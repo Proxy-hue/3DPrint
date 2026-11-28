@@ -30,8 +30,27 @@ export interface CatalogData {
   compat: CompatMatrix
 }
 
-export function unwrapList<T>(res: T[] | { results?: T[] }): T[] {
+export interface Paginated<T> {
+  count?: number
+  next?: string | null
+  results?: T[]
+}
+
+export function unwrapList<T>(res: T[] | Paginated<T>): T[] {
   return Array.isArray(res) ? res : (res.results ?? [])
+}
+
+export async function fetchAllPages<T>(
+  fetchPage: (page: number) => Promise<T[] | Paginated<T>>,
+  maxPages = 20,
+): Promise<T[]> {
+  const out: T[] = []
+  for (let page = 1; page <= maxPages; page++) {
+    const res = await fetchPage(page)
+    out.push(...unwrapList(res))
+    if (Array.isArray(res) || !res.next) break
+  }
+  return out
 }
 
 export function filterMaterials(cat: CatalogData, techId?: string): MaterialItem[] {

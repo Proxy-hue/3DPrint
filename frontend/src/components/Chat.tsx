@@ -10,16 +10,27 @@ export default function Chat({ orderId, allowUpload, onChanged }: Props) {
   const [msgs, setMsgs] = useState<Message[]>([])
   const [text, setText] = useState('')
   const [file, setFile] = useState<File | null>(null)
+  const [loadError, setLoadError] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
-  const load = () => api<Message[]>(`/orders/${orderId}/messages`).then(setMsgs).catch(() => {})
+  const load = (isCancelled?: () => boolean) =>
+    api<Message[]>(`/orders/${orderId}/messages`)
+      .then(d => {
+        if (isCancelled?.()) return
+        setMsgs(d)
+        setLoadError('')
+      })
+      .catch(e => { if (!isCancelled?.()) setLoadError(errMsg(e)) })
+
   useEffect(() => {
-    load()
-    const t = setInterval(load, 15000)
-    return () => clearInterval(t)
+    let stop = false
+    const cancelled = () => stop
+    void load(cancelled)
+    const t = setInterval(() => void load(cancelled), 15000)
+    return () => { stop = true; clearInterval(t) }
   }, [orderId])
   useEffect(() => { box.current?.scrollTo({ top: box.current.scrollHeight }) }, [msgs.length])
 
@@ -46,7 +57,8 @@ export default function Chat({ orderId, allowUpload, onChanged }: Props) {
   return (
     <div className="card">
       <h2 className="mb-3 text-lg font-semibold">Переписка по заказу</h2>
-      <div ref={box} className="mb-3 max-h-72 space-y-2 overflow-y-auto rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+      <ErrorBox message={loadError} />
+      <div ref={box} className="mb-3 mt-2 max-h-72 space-y-2 overflow-y-auto rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
         {msgs.length === 0 && <div className="text-sm text-slate-500">Сообщений пока нет.</div>}
         {msgs.map(m => (
           <div key={m.id} className="text-sm">

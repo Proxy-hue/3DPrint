@@ -97,7 +97,7 @@ class OrderEvent(BaseModel):
 
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='events')
     actor = models.ForeignKey(
-        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='+',
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT, related_name='+',
     )
     type = models.CharField(max_length=48)
     from_status = models.CharField(max_length=24, blank=True, default='')

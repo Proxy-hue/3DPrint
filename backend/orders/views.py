@@ -1,9 +1,12 @@
 import io
+import uuid
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.http import FileResponse, Http404
-from django.utils.dateparse import parse_date
+from django.utils import timezone
+from django.utils.dateparse import parse_date, parse_datetime
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -31,9 +34,22 @@ ALLOWED_ORDERING = {
 }
 
 
+def _parse_uuid(raw, label):
+    try:
+        return uuid.UUID(str(raw))
+    except (ValueError, TypeError):
+        raise DomainError(f'Некорректный идентификатор фильтра ({label}).', 'validation')
+
+
 def get_order(request, pk):
     is_mgr = get_role(request.user) in (MANAGER, ADMIN)
-    qs = Order.objects.all() if is_mgr else Order.objects.filter(client=request.user)
+    base = (
+        Order.objects.select_related(
+            'client', 'material', 'technology', 'quality_profile',
+            'color', 'delivery_method', 'pickup_point',
+        ).prefetch_related('post_processings')
+    )
+    qs = base if is_mgr else base.filter(client=request.user)
     o = qs.filter(pk=pk).first()
     if not o:
         raise Http404
@@ -64,9 +80,11 @@ class OrderListCreate(APIView):
             except ValueError:
                 raise DomainError('Некорректный фильтр приоритета.', 'validation')
         if p.get('material'):
-            qs = qs.filter(material_id=p['material'])
-        if p.get('workshop') and hasattr(Order, 'assignments'):
-            qs = qs.filter(assignments__is_current=True, assignments__printer__workshop_id=p['workshop'])
+            qs = qs.filter(material_id=_parse_uuid(p['material'], 'material'))
+        if p.get('workshop'):
+            wid = _parse_uuid(p['workshop'], 'workshop')
+            if hasattr(Order, 'assignments'):
+                qs = qs.filter(assignments__is_current=True, assignments__printer__workshop_id=wid)
         if p.get('date_from'):
             df = parse_date(p['date_from'])
             if not df:
@@ -108,8 +126,9 @@ class OrderListCreate(APIView):
                 raise DomainError('E-01: Размер файла превышает 50 МБ.', 'E-01')
             raw = f.read()
             adapters.check_upload_prevalidate(f.name, raw)
-            o = services.create_draft(request.user)
-            services.attach_model(o, request.user, f.name, raw)
+            with transaction.atomic():
+                o = services.create_draft(request.user)
+                services.attach_model(o, request.user, f.name, raw)
             o.refresh_from_db()
             return Response(ser.detail(o, request.user), status=201)
         o = services.create_draft(request.user, request.data if request.data else None)
@@ -242,7 +261,8 @@ class OrderStatus(APIView):
 
     def post(self, request, pk):
         o = get_order(request, pk)
-        services.change_status(o, request.user, request.data.get('to'), request.data.get('reason', ''))
+        target = request.data.get('status') or request.data.get('to')
+        services.change_status(o, request.user, target, request.data.get('reason', ''))
         o.refresh_from_db()
         return Response(ser.detail(o, request.user))
 
@@ -276,7 +296,15 @@ class OrderMessages(APIView):
 
     def get(self, request, pk):
         o = get_order(request, pk)
-        return Response([ser.message_dto(m) for m in messaging_services.list_messages(o)])
+        since = None
+        raw_since = request.query_params.get('since')
+        if raw_since:
+            since = parse_datetime(raw_since)
+            if not since:
+                raise DomainError('Некорректный формат параметра since.', 'validation')
+            if timezone.is_naive(since):
+                since = timezone.make_aware(since)
+        return Response([ser.message_dto(m) for m in messaging_services.list_for(o, since=since)])
 
     def post(self, request, pk):
         o = get_order(request, pk)

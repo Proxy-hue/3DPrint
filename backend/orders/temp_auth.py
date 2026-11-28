@@ -5,6 +5,7 @@
 чтобы не менять чужие файлы и обеспечить локальную проверку клиентского портала до
 интеграции `users`.
 """
+from django.conf import settings
 from django.contrib.auth import authenticate, get_user_model, login, logout
 from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
@@ -111,9 +112,10 @@ def password_reset_view(request):
     if user:
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         token = default_token_generator.make_token(user)
+        base_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
         send_mail(
             '3DPrint: восстановление пароля',
-            f'Ссылка для сброса: /reset-password/{uid}/{token}',
+            f'Ссылка для сброса: {base_url}/reset-password/{uid}/{token}',
             'noreply@3dprint.local',
             [user.email],
             fail_silently=True,
@@ -131,7 +133,7 @@ def password_reset_confirm_view(request):
     except Exception:
         return Response({'detail': 'Недействительная ссылка сброса пароля.'}, status=400)
     if not default_token_generator.check_token(user, str(data.get('token', ''))):
-        return Response({'detail': 'Срок действия токена истёк.'}, status=400)
+        return Response({'detail': 'Ссылка сброса пароля недействительна или её срок действия истёк.'}, status=400)
     password = str(data.get('password', ''))
     try:
         validate_password(password, user=user)

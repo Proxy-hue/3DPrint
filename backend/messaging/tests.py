@@ -95,3 +95,23 @@ def test_messaging_service_and_clarification_reupload(msg_env):
     assert order.status == Status.CHECKED
     assert Notification.objects.filter(user=manager, order=order).exists()
     assert messaging_services.list_for(order).count() == 2
+
+    # REST API GET /api/orders/{id}/messages для владельца и менеджера
+    r_get_client = c_api.get(f'/api/orders/{order.pk}/messages')
+    assert r_get_client.status_code == 200
+    assert len(r_get_client.data) == 2
+    assert r_get_client.data[0]['text'] == 'Уточните толщину стенки.'
+    assert r_get_client.data[1]['model_version'] == 2
+
+    m_api = APIClient()
+    m_api.force_authenticate(manager)
+    r_get_mgr = m_api.get(f'/api/orders/{order.pk}/messages')
+    assert r_get_mgr.status_code == 200
+    assert len(r_get_mgr.data) == 2
+
+    # Проверка фильтра ?since=
+    first_ts = r_get_client.data[0]['created_at']
+    r_since = c_api.get(f'/api/orders/{order.pk}/messages', {'since': first_ts})
+    assert r_since.status_code == 200
+    assert len(r_since.data) == 1
+    assert c_api.get(f'/api/orders/{order.pk}/messages', {'since': 'not-a-date'}).status_code == 400

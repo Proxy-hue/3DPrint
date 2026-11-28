@@ -18,6 +18,7 @@ class Quote(BaseModel):
     cost_post = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     cost_delivery = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     adjustment = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    base_total = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
     total = models.DecimalField(max_digits=12, decimal_places=0)
     print_hours = models.DecimalField(max_digits=10, decimal_places=2)
     mass_g = models.DecimalField(max_digits=12, decimal_places=2)
@@ -28,6 +29,11 @@ class Quote(BaseModel):
         db_table = 'quote'
         constraints = [
             models.CheckConstraint(condition=models.Q(total__gte=0), name='quote_total_gte_0'),
+            models.UniqueConstraint(
+                fields=['order'],
+                condition=models.Q(is_current=True),
+                name='uniq_current_quote_per_order',
+            ),
         ]
         indexes = [models.Index(fields=['order', 'is_current'])]
         ordering = ['-created_at']

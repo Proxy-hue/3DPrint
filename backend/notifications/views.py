@@ -1,4 +1,5 @@
 from django.http import Http404
+from django.utils import timezone
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -38,3 +39,13 @@ class NotificationRead(APIView):
             n.is_read = True
             n.save(update_fields=['is_read', 'updated_at'])
         return Response(dto(n))
+
+
+class NotificationReadAll(APIView):
+    permission_classes = [IsAnyRole]
+
+    def post(self, request):
+        updated = Notification.objects.filter(
+            user=request.user, channel='INAPP', is_read=False,
+        ).update(is_read=True, updated_at=timezone.now())
+        return Response({'updated': updated, 'unread': 0})

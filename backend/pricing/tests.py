@@ -167,3 +167,24 @@ def test_queue_wait_increases_estimated_days():
     )
     assert r0.days_print == 1
     assert r1.days_print == 2
+
+
+def test_zero_flow_raises_quote_error(catalog_data, client_user):
+    order, mv = _make_order_for_pricing(
+        client_user, tech='FDM', material='PLA', quality='Стандартное', color='белый', volume=18,
+    )
+    order.quality_profile.flow_cm3_h = Decimal('0.00')
+    with pytest.raises(pricing_services.QuoteError):
+        pricing_services.calculate(order, mv)
+
+
+def test_adjustment_no_rounding_drift(catalog_data, client_user):
+    order, mv = _make_order_for_pricing(
+        client_user, tech='FDM', material='PLA', quality='Стандартное', color='белый', volume=18,
+    )
+    q0 = pricing_services.calculate(order, mv)
+    assert int(q0.total) == 300
+    q1 = pricing_services.apply_adjustment(order, Decimal('0.50'))
+    assert int(q1.total) == 301
+    q2 = pricing_services.apply_adjustment(order, Decimal('0'))
+    assert int(q2.total) == 300

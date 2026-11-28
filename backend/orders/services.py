@@ -43,17 +43,18 @@ TRANSITIONS = {
     (S.CHECKED, S.REJECTED): ({MANAGER}, {MANAGER}),
     (S.CHECKED, S.AWAITING_PAYMENT): ({MANAGER}, set()),
     (S.CLARIFICATION, S.NEW): ({CLIENT, SYSTEM}, set()),
+    (S.CLARIFICATION, S.REJECTED): ({MANAGER}, {MANAGER}),
     (S.AWAITING_PAYMENT, S.PAID): ({CLIENT, SYSTEM}, set()),
-    (S.PAID, S.DISTRIBUTED): ({MANAGER, SYSTEM}, set()),
+    (S.PAID, S.DISTRIBUTED): ({MANAGER}, set()),
     (S.DISTRIBUTED, S.PRINTING): ({MANAGER, INTEGRATION}, set()),
     (S.PRINTING, S.POST_PROCESSING): ({MANAGER, INTEGRATION}, set()),
     (S.PRINTING, S.READY): ({MANAGER, INTEGRATION}, set()),
-    (S.POST_PROCESSING, S.READY): ({MANAGER, INTEGRATION}, set()),
+    (S.POST_PROCESSING, S.READY): ({MANAGER}, set()),
     (S.READY, S.COMPLETED): ({MANAGER}, set()),
 }
 for _st in (S.NEW, S.CHECKED, S.MANUAL_REVIEW, S.CLARIFICATION, S.AWAITING_PAYMENT):
     TRANSITIONS[(_st, S.CANCELLED)] = ({CLIENT, MANAGER}, {MANAGER})
-for _st in (S.PAID, S.DISTRIBUTED, S.PRINTING, S.POST_PROCESSING, S.READY):
+for _st in (S.PAID, S.DISTRIBUTED):
     TRANSITIONS[(_st, S.CANCELLED)] = ({MANAGER}, {MANAGER})
 
 
@@ -98,6 +99,14 @@ def _bump(order, **fields):
 def _check_access(order, user, role):
     if role == CLIENT and user is not None and order.client_id != user.id:
         raise err('Заказ не найден.', 'not_found', 404)
+
+
+def _lock_order(order):
+    """Берёт пессимистичную блокировку строки заказа и обновляет поля в памяти."""
+    locked = Order.objects.select_for_update().filter(pk=order.pk).first()
+    if not locked:
+        raise err('Заказ не найден.', 'not_found', 404)
+    order.refresh_from_db()
 
 
 def can_pass_guard(order, to) -> bool:
@@ -269,13 +278,14 @@ def update_draft(order, user, data, recalc=True):
                     raise err(f'Недопустимое или неактивное значение справочника ({key}).', 'validation')
                 fields[key + '_id'] = obj.pk
 
-    if fields:
+    if fields or 'post_processing' in data:
         _bump(order, **fields)
 
     if 'post_processing' in data:
-        pp_ids = data['post_processing'] or []
-        if not isinstance(pp_ids, (list, tuple)):
+        raw_pps = data['post_processing'] or []
+        if not isinstance(raw_pps, (list, tuple)):
             raise err('Список опций постобработки должен быть массивом.', 'validation')
+        pp_ids = list(dict.fromkeys(str(pid) for pid in raw_pps))
         valid_pps = []
         for pid in pp_ids:
             try:
@@ -296,6 +306,7 @@ def update_draft(order, user, data, recalc=True):
 
 @transaction.atomic
 def attach_model(order, user, file_name, data):
+    _lock_order(order)
     if order.status not in (S.DRAFT, S.CLARIFICATION):
         raise err('Загрузить модель можно только в черновике или при уточнении.', 'bad_status', 409)
     _check_access(order, user, CLIENT)
@@ -307,30 +318,40 @@ def attach_model(order, user, file_name, data):
 
 
 # ---------- Валидация и расчёт ----------
+@transaction.atomic
 def process_order(order_id):
     """Валидация + расчёт (+ автопереход NEW → CHECKED/MANUAL_REVIEW)."""
-    order = Order.objects.select_related(
-        'technology', 'material', 'quality_profile', 'color',
-        'delivery_method', 'pickup_point', 'client',
-    ).get(pk=order_id)
+    order = (
+        Order.objects.select_for_update(of=('self',))
+        .select_related(
+            'technology', 'material', 'quality_profile', 'color',
+            'delivery_method', 'pickup_point', 'client',
+        )
+        .filter(pk=order_id)
+        .first()
+    )
+    if not order:
+        return None
     mv = adapters.current_model_version(order)
     if not mv:
         return None
     try:
-        vr = adapters.validate_order_model(order, mv)
-        quote = None
-        try:
-            quote = pricing_services.calculate(order, mv, needs_support=vr.needs_support)
-        except (pricing_services.QuoteError, DomainError):
+        with transaction.atomic():
+            vr = adapters.validate_order_model(order, mv)
             quote = None
-        if order.status == S.NEW:
-            if vr.verdict != 'ERROR' and quote:
-                transition(order, S.CHECKED, role=SYSTEM)
-            else:
-                transition(order, S.MANUAL_REVIEW, role=SYSTEM)
-        return vr, quote
+            try:
+                quote = pricing_services.calculate(order, mv, needs_support=vr.needs_support)
+            except (pricing_services.QuoteError, DomainError):
+                quote = None
+            if order.status == S.NEW:
+                if vr.verdict != 'ERROR' and quote:
+                    transition(order, S.CHECKED, role=SYSTEM)
+                else:
+                    transition(order, S.MANUAL_REVIEW, role=SYSTEM)
+            return vr, quote
     except Exception as exc:
         logger.exception('Ошибка при автоматической проверке/расчёте заказа %s: %s', order.number, exc)
+        order.refresh_from_db()
         if order.status == S.NEW:
             transition(order, S.MANUAL_REVIEW, role=SYSTEM, reason='Ошибка автоматической обработки')
         return None
@@ -351,7 +372,9 @@ def quote_state(order):
 
 
 # ---------- Действия клиента ----------
+@transaction.atomic
 def confirm(order, user):
+    _lock_order(order)
     _check_access(order, user, CLIENT)
     if order.status != S.DRAFT:
         raise err('Подтвердить можно только черновик.', 'not_draft', 409)
@@ -371,6 +394,10 @@ def confirm(order, user):
         raise err('Не заполнено: ' + ', '.join(missing) + '.', 'incomplete')
     if order.delivery_method.type == 'PICKUP' and not order.pickup_point_id:
         raise err('Выберите пункт выдачи.', 'incomplete')
+    if order.delivery_method.type == 'COURIER' and not (order.delivery_address or '').strip():
+        raise err('Укажите адрес доставки.', 'incomplete')
+    if not desired_date_ok(order.desired_date):
+        raise err('Желаемая дата не может быть в прошлом.', 'validation')
     transition(order, S.NEW, user=user)
     enqueue_process(order.pk)
     return order
@@ -380,14 +407,19 @@ def enqueue_process(order_id):
     enqueue('orders.services.process_order', str(order_id))
 
 
+@transaction.atomic
 def cancel(order, user, reason=''):
+    _lock_order(order)
     return transition(order, S.CANCELLED, user=user, reason=reason)
 
 
 @transaction.atomic
 def pay(order, user):
-    Order.objects.select_for_update().filter(pk=order.pk).first()
-    _check_access(order, user, CLIENT)
+    _lock_order(order)
+    role = norm_role(user)
+    if role != CLIENT:
+        raise err('Оплатить заказ может только клиент.', 'forbidden', 403)
+    _check_access(order, user, role)
     if order.status != S.AWAITING_PAYMENT:
         raise err('Оплата доступна только для заказов в статусе «Ожидает оплаты».', 'bad_status', 409)
     quote = pricing_services.current_quote(order)
@@ -401,11 +433,22 @@ def pay(order, user):
 def repeat(order, user):
     _check_access(order, user, CLIENT)
     new = create_draft(user)
-    fields = {k + '_id': getattr(order, k + '_id') for k in PARAM_FIELDS}
+    active = {
+        k: obj for k in PARAM_FIELDS
+        if (obj := getattr(order, k, None)) is not None and getattr(obj, 'is_active', True)
+    }
+    if 'technology' not in active:
+        active.pop('material', None)
+        active.pop('quality_profile', None)
+    if 'material' not in active:
+        active.pop('color', None)
+    if 'delivery_method' not in active:
+        active.pop('pickup_point', None)
+    fields = {f'{k}_id': obj.pk for k, obj in active.items()}
     fields.update(quantity=order.quantity, delivery_address=order.delivery_address, comment=order.comment)
     _bump(new, **fields)
     new.refresh_from_db()
-    for pp in order.post_processings.all():
+    for pp in order.post_processings.filter(is_active=True):
         OrderPostProcessing.objects.create(order=new, post_processing=pp)
     adapters.clone_model_version(order, new)
     event(new, 'REPEATED', user, payload={'source': str(order.pk)})
@@ -416,6 +459,7 @@ def repeat(order, user):
 # ---------- Переписка ----------
 @transaction.atomic
 def post_message(order, user, text, file_name=None, file_bytes=None):
+    _lock_order(order)
     role = norm_role(user)
     _check_access(order, user, role)
     text = (text or '').strip()
@@ -430,8 +474,9 @@ def post_message(order, user, text, file_name=None, file_bytes=None):
     msg = messaging_services.post(order, user, text, mv)
     event(order, 'MESSAGE', user, payload={'model_version': mv.version if mv else None})
     if role == CLIENT:
-        for m in _managers():
-            notification_services.notify(m, f'Заказ {order.number}: новое сообщение от клиента.', order)
+        if order.status != S.DRAFT:
+            for m in _managers():
+                notification_services.notify(m, f'Заказ {order.number}: новое сообщение от клиента.', order)
         if order.status == S.CLARIFICATION:
             transition(order, S.NEW, user=user)
             enqueue_process(order.pk)
@@ -447,7 +492,7 @@ def post_message(order, user, text, file_name=None, file_bytes=None):
 # ---------- Решения менеджера / администратора ----------
 @transaction.atomic
 def decision(order, user, action, reason=''):
-    Order.objects.select_for_update().filter(pk=order.pk).first()
+    _lock_order(order)
     st = S(order.status)
     if action == 'approve':
         quote = pricing_services.current_quote(order)
@@ -486,7 +531,7 @@ def decision(order, user, action, reason=''):
 
 @transaction.atomic
 def change_status(order, user, to, reason=''):
-    Order.objects.select_for_update().filter(pk=order.pk).first()
+    _lock_order(order)
     transition(order, to, user=user, reason=reason)
     if order.status == S.AWAITING_PAYMENT and not payment_services.stub_enabled():
         quote = pricing_services.current_quote(order)
@@ -500,6 +545,7 @@ def change_status(order, user, to, reason=''):
 def set_priority(order, user, priority):
     if get_role(user) not in (MANAGER, ADMIN):
         raise err('Недостаточно прав.', 'forbidden', 403)
+    _lock_order(order)
     try:
         p = int(priority)
     except (TypeError, ValueError):
@@ -525,7 +571,7 @@ def recommendation(order):
 
 @transaction.atomic
 def assign_printer(order, user, printer_id, reason=''):
-    Order.objects.select_for_update().filter(pk=order.pk).first()
+    _lock_order(order)
     if order.status not in (S.PAID, S.DISTRIBUTED):
         raise err('Назначение принтера возможно для заказов в статусах «Оплачен» и «Распределён».', 'bad_status', 409)
     if not printer_id:
@@ -535,6 +581,14 @@ def assign_printer(order, user, printer_id, reason=''):
     top_ids = [r['printer_id'] for r in rec['top']]
     all_ids = top_ids + [r['printer_id'] for r in rec['others']]
     if pid not in all_ids:
+        ex = next((e for e in rec.get('excluded', []) if str(e.get('printer_id')) == pid), None)
+        why = (
+            ex.get('reason') or ', '.join(str(x) for x in (ex.get('reasons') or ()))
+            if ex
+            else ''
+        )
+        if why:
+            raise err(f'Принтер не подходит: {why}', 'printer_ineligible')
         raise err('Принтер не найден среди подходящих.', 'printer_ineligible')
     manual = pid not in top_ids
     if manual and not (reason or '').strip():
@@ -558,7 +612,7 @@ def adjust_price(order, user, amount, reason):
         raise err('Корректировка цены доступна только администратору.', 'forbidden', 403)
     if not (reason or '').strip():
         raise err('Укажите причину корректировки.', 'reason_required')
-    Order.objects.select_for_update().filter(pk=order.pk).first()
+    _lock_order(order)
     if order.status not in (S.MANUAL_REVIEW, S.CHECKED, S.CLARIFICATION):
         raise err('Корректировка возможна до отправки на оплату.', 'bad_status', 409)
     before = pricing_services.current_quote(order)

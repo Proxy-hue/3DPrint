@@ -1,5 +1,5 @@
 import type { Order } from '../api/types'
-import { fmtDay, rub } from './ui'
+import { fmtDate, fmtDay, rub } from './ui'
 
 export function QuoteBlock({ order }: { order: Order }) {
   const q = order.quote
@@ -33,6 +33,10 @@ export function ParamsBlock({ order }: { order: Order }) {
   if (order.pickup_point) rows.push(['Пункт выдачи', order.pickup_point.name])
   if (order.delivery_address) rows.push(['Адрес доставки', order.delivery_address])
   if (order.planned_date) rows.push(['Плановая дата', fmtDay(order.planned_date)])
+  if (order.assignment) {
+    rows.push(['Принтер', `${order.assignment.printer} (${order.assignment.workshop})`])
+    rows.push(['Окно печати', `${fmtDate(order.assignment.planned_start)} — ${fmtDate(order.assignment.planned_end)}`])
+  }
   if (order.model) rows.push(['Модель', `${order.model.file_name} (${order.model.format}, ${(order.model.size_bytes / 1048576).toFixed(1)} МБ, v${order.model.version})`])
   if (order.model) rows.push(['Габариты, мм', order.model.bbox.map(x => x.toFixed(1)).join(' × ') + ` · ${order.model.volume_cm3.toFixed(1)} см³ · тел: ${order.model.body_count}`])
   return (

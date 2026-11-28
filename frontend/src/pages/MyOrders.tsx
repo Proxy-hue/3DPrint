@@ -8,19 +8,33 @@ export default function MyOrders() {
   const [data, setData] = useState<OrderList | null>(null)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
+  const [q, setQ] = useState('')
   const [page, setPage] = useState(1)
   const nav = useNavigate()
 
   useEffect(() => {
-    setData(null)
-    api<OrderList>('/orders', { params: { status, page } }).then(setData).catch(e => setError(errMsg(e)))
-  }, [status, page])
+    let stop = false
+    const t = setTimeout(() => {
+      setData(null)
+      api<OrderList>('/orders', { params: { status, q: q.trim(), page } })
+        .then(d => { if (!stop) { setData(d); setError('') } })
+        .catch(e => { if (!stop) setError(errMsg(e)) })
+    }, q ? 200 : 0)
+    return () => { stop = true; clearTimeout(t) }
+  }, [status, q, page])
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-2xl font-semibold">Мои заказы</h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <input
+            className="input w-56"
+            type="search"
+            placeholder="Поиск по номеру…"
+            value={q}
+            onChange={e => { setPage(1); setQ(e.target.value) }}
+          />
           <select className="input w-56" value={status} onChange={e => { setPage(1); setStatus(e.target.value) }}>
             <option value="">Все статусы</option>
             {STATUSES.map(s => <option key={s.code} value={s.code}>{s.label}</option>)}

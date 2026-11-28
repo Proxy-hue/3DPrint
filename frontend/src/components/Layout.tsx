@@ -1,18 +1,46 @@
-import { useEffect, useState } from 'react'
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useTheme } from './Theme'
 import { api } from '../api/client'
 
-function Bell() {
+function Bell({ userId }: { userId?: string }) {
   const [n, setN] = useState(0)
+  const { pathname } = useLocation()
+  const seq = useRef(0)
+
   useEffect(() => {
+    if (!userId) return
     let stop = false
-    const load = () => api<{ unread: number }>('/notifications').then(d => { if (!stop) setN(d.unread) }).catch(() => {})
+    const load = () => {
+      const id = ++seq.current
+      api<{ unread: number }>('/notifications')
+        .then(d => { if (!stop && seq.current === id) setN(d.unread) })
+        .catch(() => {})
+    }
+    const onChanged = (e: Event) => {
+      const unread = (e as CustomEvent<{ unread?: number }>).detail?.unread
+      if (typeof unread === 'number') {
+        seq.current += 1
+        setN(unread)
+      } else {
+        load()
+      }
+    }
+    const onVisible = () => { if (document.visibilityState === 'visible') load() }
     load()
-    const t = setInterval(load, 30000)
-    return () => { stop = true; clearInterval(t) }
-  }, [])
+    const t = setInterval(load, 10000)
+    window.addEventListener('notifications:changed', onChanged)
+    window.addEventListener('focus', load)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      stop = true
+      clearInterval(t)
+      window.removeEventListener('notifications:changed', onChanged)
+      window.removeEventListener('focus', load)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [userId, pathname])
   return (
     <Link to="/notifications" className="btn-secondary relative" title="Уведомления">
       🔔
@@ -50,7 +78,7 @@ export default function Layout() {
             {user?.role === 'ADMIN' && <a href="/admin/" className="rounded-lg px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-200 dark:text-slate-300 dark:hover:bg-slate-800">Админ-панель</a>}
           </nav>
           <div className="ml-auto flex items-center gap-2">
-            <Bell />
+            <Bell userId={user?.id} />
             <button className="btn-secondary" onClick={toggle} title="Сменить тему">{theme === 'dark' ? '☀️ Светлая' : '🌙 Тёмная'}</button>
             <span className="hidden text-sm text-slate-500 lg:inline">{user?.full_name || user?.email}</span>
             <button className="btn-secondary" onClick={async () => { await logout(); nav('/login') }}>Выйти</button>

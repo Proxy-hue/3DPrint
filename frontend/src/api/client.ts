@@ -1,4 +1,9 @@
-const BASE: string = (import.meta.env.VITE_API_URL as string | undefined) ?? '/api'
+export const API_BASE: string = (import.meta.env.VITE_API_URL as string | undefined) ?? '/api'
+const BASE: string = API_BASE
+
+export function notifyNotificationsChanged(unread?: number) {
+  window.dispatchEvent(new CustomEvent<{ unread?: number }>('notifications:changed', { detail: { unread } }))
+}
 
 export class ApiError extends Error {
   status: number
@@ -44,7 +49,13 @@ export async function api<T = any>(path: string, opts: Opts = {}): Promise<T> {
   if (method !== 'GET') headers['X-CSRFToken'] = csrfToken()
   let res: Response
   try {
-    res = await fetch(url, { method, headers, body, credentials: 'include' })
+    res = await fetch(url, {
+      method,
+      headers,
+      body,
+      credentials: 'include',
+      cache: method === 'GET' ? 'no-store' : 'default',
+    })
   } catch {
     throw new ApiError('Нет связи с сервером. Проверьте подключение.', 0)
   }

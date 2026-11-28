@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { EVENT_LABELS, STATUSES, eventLabel, rub } from './components/ui'
 import {
   type CatalogData,
+  fetchAllPages,
   filterColors,
   filterMaterials,
   filterQualities,
@@ -62,9 +63,13 @@ describe('catalog compatibility helpers', () => {
     },
   }
 
-  it('распаковывает пагинированные ответы DRF', () => {
+  it('распаковывает и дозагружает пагинированные ответы DRF', async () => {
     expect(unwrapList({ results: [1, 2] })).toEqual([1, 2])
     expect(unwrapList([3, 4])).toEqual([3, 4])
+    const all = await fetchAllPages(async p => (
+      p === 1 ? { results: [1, 2], next: '/api?page=2' } : { results: [3], next: null }
+    ))
+    expect(all).toEqual([1, 2, 3])
   })
 
   it('фильтрует материалы, цвета и профили качества', () => {

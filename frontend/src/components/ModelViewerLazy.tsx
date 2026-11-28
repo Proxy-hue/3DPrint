@@ -2,7 +2,7 @@ import { lazy, Suspense } from 'react'
 
 const Viewer = lazy(() => import('./ModelViewer'))
 
-type Props = { orderId: string; version: number; format: string; height?: number }
+type Props = { orderId: string; version: number; format: string; height?: number; colorHex?: string; transparent?: boolean }
 
 /** Three.js подгружается отдельным чанком только при показе модели. */
 export default function ModelViewer(props: Props) {

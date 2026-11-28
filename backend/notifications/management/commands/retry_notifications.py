@@ -1,6 +1,7 @@
 import time
 
 from django.core.management.base import BaseCommand
+from django.db import close_old_connections
 
 from notifications.services import retry_due_emails
 
@@ -20,9 +21,13 @@ class Command(BaseCommand):
         self.stdout.write(f'Запуск цикла retry_notifications каждые {sleep_sec} с...')
         try:
             while True:
-                count = retry_due_emails()
-                if count > 0:
-                    self.stdout.write(f'Обработано: {count}')
+                close_old_connections()
+                try:
+                    count = retry_due_emails()
+                    if count > 0:
+                        self.stdout.write(f'Обработано: {count}')
+                except Exception as exc:
+                    self.stderr.write(f'Ошибка при повторе уведомлений: {exc}')
                 time.sleep(sleep_sec)
         except KeyboardInterrupt:
             self.stdout.write('Остановлено.')

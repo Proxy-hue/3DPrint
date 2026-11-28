@@ -12,6 +12,7 @@ export interface User {
 }
 
 export interface Ref { id: string; name: string }
+export interface ColorRef extends Ref { hex?: string; is_transparent?: boolean }
 export interface Issue { code: string; message: string }
 export interface Validation { verdict: 'OK' | 'WARNING' | 'ERROR'; issues: Issue[]; needs_support: boolean }
 export interface Quote {
@@ -33,7 +34,7 @@ export interface Assignment {
 export interface Order {
   id: string; number: string; status: string; status_label: string; priority: number; quantity: number
   material: Ref | null; technology: { id: string; code: string } | null
-  quality_profile: Ref | null; color: Ref | null; delivery_method: Ref | null; pickup_point: Ref | null
+  quality_profile: Ref | null; color: ColorRef | null; delivery_method: Ref | null; pickup_point: Ref | null
   post_processing: Ref[]; delivery_address: string; comment: string; desired_date: string | null
   planned_date: string | null; reject_reason: string; version: number
   total: number | null; created_at: string; updated_at: string

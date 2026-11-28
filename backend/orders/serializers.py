@@ -113,7 +113,7 @@ def detail(o, user):
         'planned_date': o.planned_date,
         'reject_reason': o.reject_reason,
         'quality_profile': _ref(o.quality_profile),
-        'color': _ref(o.color),
+        'color': _ref(o.color, ('hex', 'is_transparent')),
         'delivery_method': _ref(o.delivery_method, ('type',)),
         'pickup_point': _ref(o.pickup_point),
         'post_processing': [{'id': _s(p.id), 'name': p.name} for p in o.post_processings.all()],

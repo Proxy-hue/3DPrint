@@ -1,5 +1,6 @@
 """Тесты модуля notifications: INAPP/EMAIL доставка, ретраи [5, 15, 60], REST API и команда."""
 import pytest
+from datetime import timedelta
 from django.core import mail
 from django.core.mail.backends.base import BaseEmailBackend
 from django.core.management import call_command
@@ -89,3 +90,39 @@ def test_notifications_api_and_read_isolation(notif_users):
 
     n2 = Notification.objects.get(user=u2)
     assert api.post(f'/api/notifications/{n2.pk}/read').status_code == 404
+
+    Notification.objects.create(user=u1, channel='INAPP', text='Ещё 1', delivery_status='DELIVERED')
+    Notification.objects.create(user=u1, channel='INAPP', text='Ещё 2', delivery_status='DELIVERED')
+    assert api.get('/api/notifications').data['unread'] == 2
+    r_all = api.post('/api/notifications/read-all')
+    assert r_all.status_code == 200
+    assert r_all.data['unread'] == 0
+    assert r_all.data['updated'] == 2
+    assert Notification.objects.filter(user=u2, is_read=False).count() == 1
+
+
+def test_pending_notification_not_raced_immediately_by_retry(notif_users, settings):
+    settings.TASKS_SYNC = False
+    orig_enqueue = ns.enqueue
+    ns.enqueue = lambda *a, **kw: None
+    try:
+        ns.notify(notif_users['u1'], 'Свежее письмо')
+    finally:
+        ns.enqueue = orig_enqueue
+    assert ns.retry_due_emails() == 0
+
+
+def test_retry_recovers_stale_sending_only(notif_users):
+    u1 = notif_users['u1']
+    stale = Notification.objects.create(user=u1, channel='EMAIL', text='stale', delivery_status='SENDING')
+    fresh = Notification.objects.create(user=u1, channel='EMAIL', text='fresh', delivery_status='SENDING')
+    Notification.objects.filter(pk=stale.pk).update(updated_at=timezone.now() - timedelta(minutes=11))
+
+    processed = ns.retry_due_emails()
+    assert processed == 1
+    stale.refresh_from_db()
+    fresh.refresh_from_db()
+    assert stale.delivery_status == 'DELIVERED'
+    assert fresh.delivery_status == 'SENDING'
+    assert len(mail.outbox) == 1
+    assert mail.outbox[0].body == 'stale'

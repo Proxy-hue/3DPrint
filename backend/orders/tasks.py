@@ -3,9 +3,12 @@
 При TASKS_SYNC=True или недоступном Redis задачи выполняются синхронно.
 """
 import importlib
+import logging
 
 from django.conf import settings
 from django.db import transaction
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve(path):
@@ -17,7 +20,8 @@ def _dispatch(func_path, *args):
     try:
         import django_rq
         return django_rq.get_queue('default').enqueue(func_path, *args)
-    except Exception:
+    except Exception as exc:
+        logger.warning('RQ недоступен (%s), выполняем %s синхронно.', exc, func_path)
         return _resolve(func_path)(*args)
 
 

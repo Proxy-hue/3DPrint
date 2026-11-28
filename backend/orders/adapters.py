@@ -9,6 +9,7 @@ import importlib
 import io
 import math
 import struct
+import uuid
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,16 +74,23 @@ def _check_upload_fallback(file_name: str, data: bytes) -> str:
                     raise DomainError('E-02: Недопустимая структура архива 3MF.', 'E-02')
                 max_unpacked = getattr(settings, 'MAX_3MF_UNPACKED_BYTES', 500 * 1024 * 1024)
                 total = 0
+                total_compressed = 0
                 has_model = False
                 for i in infos:
                     if i.flag_bits & 0x1:
                         raise DomainError('E-02: Зашифрованные архивы 3MF не поддерживаются.', 'E-02')
                     total += i.file_size
+                    total_compressed += i.compress_size
                     if i.compress_size and i.file_size / i.compress_size > MAX_3MF_RATIO and i.file_size > 1024 * 1024:
                         raise DomainError('E-02: Подозрительная степень сжатия в архиве 3MF.', 'E-02')
                     if i.filename.lower().endswith('.model'):
                         has_model = True
-                if total > max_unpacked or not has_model or zf.testzip() is not None:
+                if (
+                    total > max_unpacked
+                    or (total > 1024 * 1024 and (total_compressed == 0 or total / total_compressed > MAX_3MF_RATIO))
+                    or not has_model
+                    or zf.testzip() is not None
+                ):
                     raise DomainError('E-02: Файл 3MF повреждён.', 'E-02')
         except DomainError:
             raise
@@ -200,7 +208,7 @@ def add_model_version(order, file_name: str, data: bytes):
     versions = list(meta.get('versions') or [])
     next_ver = max((v.get('version', 0) for v in versions), default=0) + 1
     safe_name = Path(file_name or f'model.{fmt.lower()}').name
-    storage_key = f'orders_models/{order.pk}/v{next_ver}_{safe_name}'
+    storage_key = f'orders_models/{order.pk}/{uuid.uuid4().hex}.{fmt.lower()}'
     _save_bytes_fallback(storage_key, data)
 
     bbox = metrics['bbox']
@@ -263,7 +271,7 @@ def clone_model_version(src_order, dst_order):
     if not mv:
         return None
     storage_key = getattr(mv, 'storage_key', '')
-    new_key = f'orders_models/{dst_order.pk}/v1_{mv.file_name}'
+    new_key = f'orders_models/{dst_order.pk}/{uuid.uuid4().hex}.{mv.format.lower()}'
     if storage_key:
         src_path = _media_root() / storage_key
         if src_path.exists():
@@ -335,7 +343,6 @@ def validate_order_model(order, mv):
     an = getattr(mv, 'analysis', None) or {}
     tech, material = order.technology, order.material
     pps = list(order.post_processings.all())
-    pp_names = [p.name for p in pps]
 
     if (mv.volume_cm3 or 0) <= 0 or (mv.body_count or 0) < 1:
         issues.append({'code': 'E-03', 'message': 'Модель вырождена: нулевой объём или нет твёрдых тел.'})
@@ -365,7 +372,7 @@ def validate_order_model(order, mv):
             compat_errors.append(ci.message)
             issues.append({'code': ci.code, 'message': ci.message})
 
-    if tech and material and fits_tech and not compat_errors and tech_printers:
+    if tech and material and fits_tech and not compat_errors:
         mat_spec = catalog_services.get_material_spec(material.pk)
         req_spec = None
         if tech.code == 'DMLS':
@@ -401,7 +408,8 @@ def validate_order_model(order, mv):
     if (an.get('overhang_ratio') or 0) > 0.05:
         needs_support = True
         issues.append({'code': 'W-03', 'message': 'Обнаружены нависания более 45°: потребуются поддержки.'})
-    if (mv.body_count or 1) > 1 and 'Сборка' not in pp_names:
+    has_assembly = any(getattr(p, 'code', '') == 'ASSEMBLY' or p.name == 'Сборка' for p in pps)
+    if (mv.body_count or 1) > 1 and not has_assembly:
         issues.append({'code': 'W-04', 'message': 'Модель состоит из нескольких тел, а «Сборка» не выбрана.'})
     if bbox and max(bbox) > 0 and (min(bbox) < 1 or max(bbox) > 1000):
         issues.append({'code': 'W-05', 'message': 'Подозрительные единицы измерения: габарит < 1 мм или > 1000 мм.'})

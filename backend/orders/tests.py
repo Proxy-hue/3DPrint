@@ -3,6 +3,7 @@ import io
 import struct
 import zipfile
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from django.core.management import call_command
@@ -195,6 +196,8 @@ def test_rest_api_list_pagination_quote_get_and_rbac(env_data):
     }, format='json')
     assert r_patch.status_code == 200
     assert r_patch.data['quote']['total'] == 300
+    assert r_patch.data['color']['hex'] == col.hex
+    assert r_patch.data['color']['is_transparent'] is False
 
     # GET /api/orders/{id}/quote по спецификации 5.3.4 (F-CLI-06)
     r_quote = c_client.get(f'/api/orders/{oid}/quote')
@@ -293,3 +296,218 @@ def test_temp_auth_smoke(env_data):
     assert r_reg.status_code == 201
     assert anon.get('/api/auth/me').data['email'] == 'new@test.local'
     assert anon.post('/api/auth/logout', {}, format='json').status_code == 200
+
+
+def test_atomic_upload_no_orphan_draft_and_manual_review_chat_upload(env_data):
+    c_client = _api(env_data['client'])
+    c_mgr = _api(env_data['manager'])
+
+    # Файл проходит базовую проверку заголовка, но имеет вырожденный нулевой объём/битую сетку:
+    # при ошибке E-02 в POST /api/orders черновик не должен оставаться в БД
+    bad_3mf = io.BytesIO()
+    with zipfile.ZipFile(bad_3mf, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('3D/3dmodel.model', b'<broken-xml')
+    bad_file = io.BytesIO(bad_3mf.getvalue())
+    bad_file.name = 'broken.3mf'
+    r_bad = c_client.post('/api/orders', {'file': bad_file}, format='multipart')
+    assert r_bad.status_code == 400
+    assert r_bad.data['code'] == 'E-02'
+    assert Order.objects.filter(client=env_data['client']).count() == 0
+
+    # Заказ в MANUAL_REVIEW: клиент может прикрепить исправленную модель через чат
+    o = _draft_with_params(
+        env_data['client'], tech='DMLS', material='Нержавеющая сталь 316L',
+        quality='Стандартное', color='металлик', pp=['Покраска'],
+    )
+    os_.attach_model(o, env_data['client'], 'v1.stl', _binary_stl_cube(20, 20, 20))
+    os_.confirm(o, env_data['client'])
+    o.refresh_from_db()
+    assert o.status == Status.MANUAL_REVIEW
+
+    fixed_stl = io.BytesIO(_binary_stl_cube(30, 30, 30))
+    fixed_stl.name = 'v2.stl'
+    r_msg = c_client.post(
+        f'/api/orders/{o.pk}/messages',
+        {'text': 'Обновил габариты', 'file': fixed_stl},
+        format='multipart',
+    )
+    assert r_msg.status_code == 201
+    assert r_msg.data['model_version'] == 2
+    assert c_mgr.get(f'/api/orders/{o.pk}/messages').status_code == 200
+
+
+def test_fsm_26_transitions_matrix(env_data):
+    expected_pairs = {
+        (Status.DRAFT, Status.NEW),
+        (Status.DRAFT, Status.CANCELLED),
+        (Status.NEW, Status.CHECKED),
+        (Status.NEW, Status.MANUAL_REVIEW),
+        (Status.NEW, Status.CANCELLED),
+        (Status.MANUAL_REVIEW, Status.CHECKED),
+        (Status.MANUAL_REVIEW, Status.CLARIFICATION),
+        (Status.MANUAL_REVIEW, Status.REJECTED),
+        (Status.MANUAL_REVIEW, Status.CANCELLED),
+        (Status.CHECKED, Status.CLARIFICATION),
+        (Status.CHECKED, Status.REJECTED),
+        (Status.CHECKED, Status.AWAITING_PAYMENT),
+        (Status.CHECKED, Status.CANCELLED),
+        (Status.CLARIFICATION, Status.NEW),
+        (Status.CLARIFICATION, Status.REJECTED),
+        (Status.CLARIFICATION, Status.CANCELLED),
+        (Status.AWAITING_PAYMENT, Status.PAID),
+        (Status.AWAITING_PAYMENT, Status.CANCELLED),
+        (Status.PAID, Status.DISTRIBUTED),
+        (Status.PAID, Status.CANCELLED),
+        (Status.DISTRIBUTED, Status.PRINTING),
+        (Status.DISTRIBUTED, Status.CANCELLED),
+        (Status.PRINTING, Status.POST_PROCESSING),
+        (Status.PRINTING, Status.READY),
+        (Status.POST_PROCESSING, Status.READY),
+        (Status.READY, Status.COMPLETED),
+    }
+    assert set(os_.TRANSITIONS.keys()) == expected_pairs
+    assert len(os_.TRANSITIONS) == 26
+    assert os_.TRANSITIONS[(Status.PAID, Status.DISTRIBUTED)] == ({'MANAGER'}, set())
+    assert os_.TRANSITIONS[(Status.POST_PROCESSING, Status.READY)] == ({'MANAGER'}, set())
+
+    o = _draft_with_params(env_data['client'])
+    for frm in Status:
+        for to in Status:
+            if (frm, to) in expected_pairs:
+                continue
+            Order.objects.filter(pk=o.pk).update(status=frm.value)
+            o.refresh_from_db()
+            with pytest.raises(DomainError) as exc:
+                os_.transition(o, to, role=os_.SYSTEM)
+            assert exc.value.code == 'invalid_transition'
+
+
+def test_password_reset_ignores_untrusted_origin(env_data, mailoutbox):
+    anon = APIClient()
+    r = anon.post(
+        '/api/auth/password-reset',
+        {'email': env_data['client'].email},
+        format='json',
+        HTTP_ORIGIN='https://evil.tld',
+    )
+    assert r.status_code == 200
+    assert len(mailoutbox) == 1
+    assert 'evil.tld' not in mailoutbox[0].body
+    assert 'http://localhost:5173/reset-password/' in mailoutbox[0].body
+
+
+def test_filters_duplicate_pp_version_courier_status_priority_and_autopay(env_data, settings, monkeypatch):
+    c_client = _api(env_data['client'])
+    c_mgr = _api(env_data['manager'])
+
+    # Невалидный UUID в фильтрах не даёт 500
+    assert c_client.get('/api/orders', {'material': 'not-a-uuid'}).status_code == 400
+    assert c_client.get('/api/orders', {'workshop': 'bad-uuid'}).status_code == 400
+
+    # Имя исходного файла не попадает в storage_key (S-SEC-11)
+    o = _draft_with_params(env_data['client'], delivery='COURIER')
+    mv = os_.attach_model(o, env_data['client'], 'secret_part_name.stl', _binary_stl_cube(20, 20, 20))
+    assert 'secret_part_name' not in mv.storage_key
+
+    # Дубликаты post_processing дедуплицируются и инкрементируют version
+    pp = PostProcessing.objects.filter(name='Шлифовка').first()
+    v_before = o.version
+    r_pp = c_client.patch(f'/api/orders/{o.pk}', {'post_processing': [str(pp.pk), str(pp.pk)]}, format='json')
+    assert r_pp.status_code == 200
+    assert len(r_pp.data['post_processing']) == 1
+    assert r_pp.data['version'] == v_before + 1
+
+    # COURIER без delivery_address отклоняется при confirm
+    r_conf_bad = c_client.post(f'/api/orders/{o.pk}/confirm', {}, format='json')
+    assert r_conf_bad.status_code == 400
+    assert r_conf_bad.data['code'] == 'incomplete'
+
+    c_client.patch(f'/api/orders/{o.pk}', {'delivery_address': 'ул. Тестовая, 1'}, format='json')
+    assert c_client.post(f'/api/orders/{o.pk}/confirm', {}, format='json').status_code == 200
+
+    # Досылка новой модели через /model в статусе CLARIFICATION
+    assert c_mgr.post(
+        f'/api/orders/{o.pk}/decision', {'action': 'clarify', 'reason': 'Нужна доработка'}, format='json',
+    ).status_code == 200
+    stl2 = io.BytesIO(_binary_stl_cube(22, 22, 22))
+    stl2.name = 'v2.stl'
+    assert c_client.post(f'/api/orders/{o.pk}/model', {'file': stl2}, format='multipart').status_code == 201
+    o.refresh_from_db()
+    assert o.status == Status.CHECKED
+
+    # При PAY_STUB_ENABLED=False approve из CHECKED автоматически оплачивает и переводит в PAID
+    settings.PAY_STUB_ENABLED = False
+    r_app = c_mgr.post(f'/api/orders/{o.pk}/decision', {'action': 'approve'}, format='json')
+    assert r_app.status_code == 200
+    assert r_app.data['status'] == Status.PAID
+
+    # priority и /status (ключ status и to)
+    r_prio = c_mgr.post(f'/api/orders/{o.pk}/priority', {'priority': 1}, format='json')
+    assert r_prio.status_code == 200
+    assert r_prio.data['priority'] == 1
+
+    fake_assignment = SimpleNamespace(
+        printer=SimpleNamespace(name='FDM-01', workshop=SimpleNamespace(name='Основной цех')),
+        printer_id='11111111-1111-1111-1111-111111111111',
+        planned_start='2026-11-26T10:00:00Z',
+        planned_end='2026-11-26T12:00:00Z',
+        is_manual=False,
+        reason='',
+    )
+    monkeypatch.setattr(adapters, 'current_assignment', lambda order: fake_assignment)
+    r_st = c_mgr.post(f'/api/orders/{o.pk}/status', {'status': Status.DISTRIBUTED}, format='json')
+    assert r_st.status_code == 200
+    assert r_st.data['status'] == Status.DISTRIBUTED
+    assert r_st.data['assignment']['printer'] == 'FDM-01'
+
+
+def test_e06_when_no_printers_and_repeat_skips_inactive(env_data):
+    Printer.objects.filter(technology__code='DMLS').delete()
+    o = _draft_with_params(
+        env_data['client'], tech='DMLS', material='Нержавеющая сталь 316L',
+        quality='Стандартное', color='металлик',
+    )
+    os_.attach_model(o, env_data['client'], 'm.stl', _binary_stl_cube(20, 20, 20))
+    os_.confirm(o, env_data['client'])
+    o.refresh_from_db()
+    assert o.status == Status.MANUAL_REVIEW
+    assert any(i['code'] == 'E-06' for i in o.model_meta['validation']['issues'])
+
+    Material.objects.filter(pk=o.material_id).update(is_active=False)
+    cloned = os_.repeat(o, env_data['client'])
+    assert cloned.material is None
+    assert cloned.color is None
+
+
+def test_process_order_savepoint_rollback_to_manual_review(env_data, monkeypatch):
+    o = _draft_with_params(env_data['client'])
+    os_.attach_model(o, env_data['client'], 'cube.stl', _binary_stl_cube(20, 20, 20))
+    os_.transition(o, Status.NEW, user=env_data['client'])
+
+    def bad_validate(order, mv):
+        meta = dict(order.model_meta or {})
+        meta['partial_garbage'] = True
+        Order.objects.filter(pk=order.pk).update(model_meta=meta)
+        raise RuntimeError('Unexpected validation crash')
+
+    monkeypatch.setattr(adapters, 'validate_order_model', bad_validate)
+    assert os_.process_order(o.pk) is None
+    o.refresh_from_db()
+    assert o.status == Status.MANUAL_REVIEW
+    assert 'partial_garbage' not in (o.model_meta or {})
+
+
+def test_repeat_hierarchy_inactive_parents(env_data):
+    o = _draft_with_params(env_data['client'], delivery='PICKUP')
+    os_.attach_model(o, env_data['client'], 'cube.stl', _binary_stl_cube(20, 20, 20))
+
+    Technology.objects.filter(pk=o.technology_id).update(is_active=False)
+    DeliveryMethod.objects.filter(pk=o.delivery_method_id).update(is_active=False)
+
+    cloned = os_.repeat(o, env_data['client'])
+    assert cloned.technology is None
+    assert cloned.material is None
+    assert cloned.quality_profile is None
+    assert cloned.color is None
+    assert cloned.delivery_method is None
+    assert cloned.pickup_point is None

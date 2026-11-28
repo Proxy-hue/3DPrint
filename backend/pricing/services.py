@@ -88,6 +88,7 @@ def calculate(
 
     tariff = get_active_tariff()
     params = get_tariff_params()
+    type(order).objects.select_for_update().filter(pk=order.pk).first()
     prev = Quote.objects.select_for_update().filter(order=order, is_current=True).first()
     adj_dec = _parse_decimal(adjustment) if adjustment is not None else (
         prev.adjustment if prev else Decimal('0.00')
@@ -102,6 +103,8 @@ def calculate(
     c_min = params.get('min_cost', params.get('min_order_cost', 300))
     printer_h = params.get('printer_hours_per_day', 20)
     post_h = params.get('postprocessing_hours_per_day', params.get('post_hours_per_day', 8))
+    if float(q.flow_cm3_h) <= 0 or float(printer_h) <= 0 or float(post_h) <= 0:
+        raise QuoteError('Некорректные параметры тарифа (нулевая скорость печати или норма часов).')
 
     r = compute_quote(
         volume_cm3=vol, quantity=order.quantity, needs_support=needs_support,
@@ -115,12 +118,13 @@ def calculate(
     if r.total < 0:
         raise DomainError('Итоговая стоимость заказа не может быть отрицательной.', 'validation', 400)
 
+    base_total = Decimal(str(round(max(float(c_min), r.cost_base + r.cost_post) + r.cost_delivery, 4)))
     Quote.objects.filter(order=order, is_current=True).update(is_current=False)
     return Quote.objects.create(
         order=order, tariff_version=tariff,
         cost_material=round(r.cost_material, 2), cost_machine=round(r.cost_machine, 2),
         cost_post=round(r.cost_post, 2), cost_delivery=round(r.cost_delivery, 2),
-        adjustment=adj_dec, total=r.total,
+        adjustment=adj_dec, base_total=base_total, total=r.total,
         print_hours=round(r.print_hours, 2), mass_g=round(r.mass_g, 2),
         estimated_days=r.estimated_days, is_current=True,
     )
@@ -130,11 +134,12 @@ def calculate(
 def apply_adjustment(order, adjustment):
     """Корректировка цены администратором с проверкой неотрицательного итога и блокировкой."""
     adj_dec = _parse_decimal(adjustment)
+    type(order).objects.select_for_update().filter(pk=order.pk).first()
     q = Quote.objects.select_for_update().filter(order=order, is_current=True).first()
     if not q:
         raise QuoteError('Расчёт отсутствует.', 'no_quote', 409)
-    old_adj = q.adjustment
-    new_total = round_half_up(float(Decimal(q.total) - old_adj + adj_dec))
+    base = q.base_total if q.base_total is not None else (Decimal(q.total) - q.adjustment)
+    new_total = round_half_up(float(base + adj_dec))
     if new_total < 0:
         raise DomainError('Итоговая стоимость заказа не может быть отрицательной.', 'validation', 400)
     Quote.objects.filter(order=order, is_current=True).update(is_current=False)
@@ -142,7 +147,7 @@ def apply_adjustment(order, adjustment):
         order=order, tariff_version=q.tariff_version,
         cost_material=q.cost_material, cost_machine=q.cost_machine,
         cost_post=q.cost_post, cost_delivery=q.cost_delivery,
-        adjustment=adj_dec, total=new_total,
+        adjustment=adj_dec, base_total=q.base_total, total=new_total,
         print_hours=q.print_hours, mass_g=q.mass_g,
         estimated_days=q.estimated_days, is_current=True,
     )
