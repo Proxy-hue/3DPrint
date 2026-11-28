@@ -14,6 +14,7 @@ from rest_framework.test import APITestCase
 from users.models import User
 from models.models import PrintModel
 from validation.api import validate_file
+from validation.benchmarks import TYPICAL_BENCHMARK_CASES, calculate_spec_quote
 from validation.contracts import ValidationContext
 from validation.services import (
     MAX_3MF_UNCOMPRESSED_SIZE,
@@ -247,3 +248,94 @@ class ValidationTests(APITestCase):
 
         self.assertIsNotNone(finding)
         self.assertEqual(finding.code, "E-02")
+
+    def test_benchmark_30_reference_orders_spec_compliance(self):
+        # 24 typical orders T-01..T-24 (Appendix 7, Table 35): price diff <= 1 RUB, days diff == 0
+        for case in TYPICAL_BENCHMARK_CASES:
+            with self.subTest(case=case["id"]):
+                price_rub, days = calculate_spec_quote(
+                    technology=case["tech"],
+                    material=case["mat"],
+                    quality=case["qual"],
+                    volume_cm3=case["vol"],
+                    quantity=case["qty"],
+                    needs_support=case["support"],
+                    post_processing=case["post"],
+                    delivery=case["deliv"],
+                )
+                self.assertLessEqual(abs(price_rub - case["price"]), 1)
+                self.assertEqual(days, case["days"])
+
+        # P-01: unsupported format STEP -> E-01
+        p01 = validate_file(BytesIO(b"ISO-10303-21;"), "part.step")
+        self.assertEqual(p01.verdict, "ERROR")
+        self.assertEqual(p01.findings[0].code, "E-01")
+
+        # P-02: truncated/corrupted STL -> E-02
+        p02 = validate_file(BytesIO(b"solid broken"), "broken.stl")
+        self.assertEqual(p02.verdict, "ERROR")
+        self.assertEqual(p02.findings[0].code, "E-02")
+
+        # P-03: 700x700x700 mm model on FDM -> E-04 (exceeds all FDM printers)
+        p03 = validate_file(
+            BytesIO(export_mesh(box_mesh((700.0, 700.0, 700.0)), "stl")),
+            "huge.stl",
+            ValidationContext(technology="FDM"),
+        )
+        self.assertEqual(p03.verdict, "ERROR")
+        self.assertIn("E-04", {f.code for f in p03.findings})
+
+        # P-04: SLA Standard Resin + color 'красный' -> E-05
+        p04 = validate_file(
+            BytesIO(export_mesh(box_mesh((50.0, 50.0, 50.0)), "stl")),
+            "part.stl",
+            ValidationContext(
+                technology="SLA",
+                material="Стандартная смола",
+                quality_profile="Стандартное",
+                color="красный",
+            ),
+        )
+        self.assertEqual(p04.verdict, "ERROR")
+        self.assertIn("E-05", {f.code for f in p04.findings})
+
+        # P-05: DMLS when DMLS-01 is retired (0 active printers) -> E-06
+        p05 = validate_file(
+            BytesIO(export_mesh(box_mesh((60.0, 40.0, 40.0)), "stl")),
+            "steel.stl",
+            ValidationContext(
+                technology="DMLS",
+                material="Нержавеющая сталь 316L",
+                quality_profile="Стандартное",
+                color="металлик",
+                available_printers_count=0,
+            ),
+        )
+        self.assertEqual(p05.verdict, "ERROR")
+        self.assertIn("E-06", {f.code for f in p05.findings})
+
+        # P-06: thin walls + overhang + open mesh -> WARNING with W-01, W-02, W-03 and support quote 433 RUB / 1 day
+        thin_tilted = box_mesh((0.5, 40.0, 40.0))
+        thin_tilted.apply_transform(
+            trimesh.transformations.rotation_matrix(np.deg2rad(30), (0, 1, 0))
+        )
+        thin_tilted.update_faces(np.arange(len(thin_tilted.faces)) != 0)
+        p06 = validate_file(
+            BytesIO(export_mesh(thin_tilted, "stl")),
+            "statuette.stl",
+            ValidationContext(technology="FDM"),
+        )
+        self.assertEqual(p06.verdict, "WARNING")
+        self.assertTrue(p06.valid)
+        self.assertTrue(p06.needs_support)
+        self.assertEqual({f.code for f in p06.findings}, {"W-01", "W-02", "W-03"})
+        p06_price, p06_days = calculate_spec_quote(
+            technology="FDM",
+            material="PLA",
+            quality="Стандартное",
+            volume_cm3=60.0,
+            quantity=1,
+            needs_support=True,
+        )
+        self.assertEqual(p06_price, 433)
+        self.assertEqual(p06_days, 1)

@@ -7,7 +7,27 @@ from .models import User
 @admin.register(User)
 class CustomUserAdmin(UserAdmin):
     fieldsets = UserAdmin.fieldsets + (
-        ("Дополнительно", {"fields": ("role", "phone")}),
+        (
+            "Профиль 3DPrint",
+            {
+                "fields": (
+                    "role",
+                    "phone",
+                    "client_type",
+                    "company_name",
+                    "consent_at",
+                    "is_senior",
+                )
+            },
+        ),
     )
-    list_display = ("username", "email", "first_name", "last_name", "role", "is_active")
-    list_filter = ("role", "is_active", "is_staff")
+    list_display = (
+        "username",
+        "email",
+        "first_name",
+        "last_name",
+        "role",
+        "is_senior",
+        "is_active",
+    )
+    list_filter = ("role", "client_type", "is_senior", "is_active", "is_staff")

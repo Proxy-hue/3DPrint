@@ -10,6 +10,7 @@ from validation.api import ValidationContext, ValidationFinding
 class ModelReceipt:
     model_id: int
     status: str
+    version: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,8 @@ class ModelValidationOutcome:
     dimensions_mm: tuple[float, float, float] | None
     errors: tuple[str, ...]
     queued: bool = True
+    volume_cm3: float | None = None
+    verdict: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

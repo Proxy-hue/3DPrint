@@ -30,6 +30,30 @@ MIN_WALL_THICKNESS_MM = {
     "SLA": 0.4,
     "DMLS": 0.6,
 }
+DEFAULT_PRINTER_BOUNDS_MM: dict[str, tuple[tuple[float, float, float], ...]] = {
+    "FDM": ((220.0, 220.0, 250.0), (600.0, 600.0, 800.0)),
+    "SLA": ((145.0, 145.0, 185.0), (200.0, 125.0, 210.0)),
+    "DMLS": ((250.0, 250.0, 300.0),),
+}
+TECH_MATERIALS: dict[str, set[str]] = {
+    "FDM": {"pla", "abs", "нейлон (pa12)", "нейлон", "nylon", "petg"},
+    "SLA": {"стандартная смола", "высокопрочная смола", "resin"},
+    "DMLS": {"нержавеющая сталь 316l", "сталь 316l"},
+}
+TECH_QUALITY_PROFILES: dict[str, set[str]] = {
+    "FDM": {"черновое", "стандартное", "высокое"},
+    "SLA": {"стандартное", "высокое"},
+    "DMLS": {"стандартное"},
+}
+MATERIAL_COLORS: dict[str, set[str]] = {
+    "pla": {"белый", "чёрный", "черный", "серый", "красный", "синий"},
+    "abs": {"белый", "чёрный", "черный", "серый"},
+    "нейлон (pa12)": {"белый", "чёрный", "черный"},
+    "нейлон": {"белый", "чёрный", "черный"},
+    "стандартная смола": {"серый", "прозрачный"},
+    "высокопрочная смола": {"серый", "чёрный", "черный"},
+    "нержавеющая сталь 316l": {"металлик"},
+}
 OBJ_RECORDS = {"v", "vt", "vn", "f", "o", "g", "mtllib", "usemtl", "s"}
 
 
@@ -42,6 +66,7 @@ def _result(
     dimensions_mm: tuple[float, float, float] | None = None,
     *,
     needs_support: bool = False,
+    volume_cm3: float | None = None,
 ) -> ValidationResult:
     return ValidationResult(
         valid=not any(finding.severity == "error" for finding in findings),
@@ -49,6 +74,7 @@ def _result(
         dimensions_mm=dimensions_mm,
         needs_support=needs_support,
         support_factor=1.0 if needs_support else 0.0,
+        volume_cm3=volume_cm3,
     )
 
 
@@ -208,6 +234,75 @@ def _has_supported_overhang(mesh: trimesh.Trimesh) -> bool:
     return bool(np.any(overhang_angle > OVERHANG_THRESHOLD_DEGREES))
 
 
+def _fits_any_printer(
+    dimensions_mm: tuple[float, float, float],
+    printer_bounds: tuple[tuple[float, float, float], ...],
+) -> bool:
+    ordered_model = sorted(dimensions_mm)
+    for bounds in printer_bounds:
+        ordered_printer = sorted(bounds)
+        if all(m <= p for m, p in zip(ordered_model, ordered_printer)):
+            return True
+    return False
+
+
+def _check_compatibility_errors(
+    context: ValidationContext,
+    *,
+    extension: str,
+    body_count: int,
+) -> list[ValidationFinding]:
+    errors: list[ValidationFinding] = []
+    tech = context.technology.upper() if context.technology else None
+    material = context.material.strip().lower() if context.material else None
+    color = context.color.strip().lower() if context.color else None
+    quality = context.quality_profile.strip().lower() if context.quality_profile else None
+    post_opts = {opt.strip().lower() for opt in context.post_processing if opt and opt.strip()}
+
+    if tech and material and tech in TECH_MATERIALS and material not in TECH_MATERIALS[tech]:
+        errors.append(
+            _finding(
+                "E-05",
+                "error",
+                f"Материал «{context.material}» несовместим с технологией {tech}.",
+            )
+        )
+    if tech and quality and tech in TECH_QUALITY_PROFILES and quality not in TECH_QUALITY_PROFILES[tech]:
+        errors.append(
+            _finding(
+                "E-05",
+                "error",
+                f"Профиль качества «{context.quality_profile}» недоступен для {tech}.",
+            )
+        )
+    if material and color and material in MATERIAL_COLORS and color not in MATERIAL_COLORS[material]:
+        errors.append(
+            _finding(
+                "E-05",
+                "error",
+                f"Цвет «{context.color}» недоступен для материала «{context.material}».",
+            )
+        )
+    if "покраска" in post_opts or "painting" in post_opts:
+        if tech == "DMLS" or color == "прозрачный":
+            errors.append(
+                _finding(
+                    "E-05",
+                    "error",
+                    "Опция «Покраска» недоступна для DMLS и прозрачных материалов.",
+                )
+            )
+    if context.assembly_selected and (extension != ".3mf" or body_count <= 1):
+        errors.append(
+            _finding(
+                "E-05",
+                "error",
+                "Опция «Сборка» доступна только для файла 3MF с несколькими телами.",
+            )
+        )
+    return errors
+
+
 def validate_model_file(
     file: BinaryIO,
     extension: str | None = None,
@@ -362,6 +457,38 @@ def validate_model_file(
         )
         return _result(findings, dimensions_mm)
 
+    volume_cm3 = round(volume / 1000.0, 4)
+
+    technology = context.technology.upper() if context and context.technology else None
+
+    if context is not None:
+        if context.available_printers_count == 0:
+            findings.append(
+                _finding(
+                    "E-06",
+                    "error",
+                    "Нет ни одного активного принтера, прошедшего жёсткий фильтр распределения.",
+                )
+            )
+        bounds_list = context.printer_bounds_mm or (
+            DEFAULT_PRINTER_BOUNDS_MM.get(technology) if technology else None
+        )
+        if bounds_list is not None and not _fits_any_printer(dimensions_mm, bounds_list):
+            findings.append(
+                _finding(
+                    "E-04",
+                    "error",
+                    "Габариты модели (с учётом поворота) не помещаются ни в один активный принтер выбранной технологии.",
+                )
+            )
+        findings.extend(
+            _check_compatibility_errors(
+                context,
+                extension=extension,
+                body_count=body_count,
+            )
+        )
+
     if body_count > 1 and not (context and context.assembly_selected):
         findings.append(
             _finding(
@@ -380,7 +507,6 @@ def validate_model_file(
             )
         )
 
-    technology = context.technology.upper() if context and context.technology else None
     thickness_threshold = MIN_WALL_THICKNESS_MM.get(technology or "")
     if thickness_threshold is not None:
         minimum_thickness = _minimum_sampled_thickness(mesh)
@@ -407,4 +533,9 @@ def validate_model_file(
             )
         )
 
-    return _result(findings, dimensions_mm, needs_support=needs_support)
+    return _result(
+        findings,
+        dimensions_mm,
+        needs_support=needs_support,
+        volume_cm3=volume_cm3,
+    )

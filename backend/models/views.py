@@ -1,11 +1,17 @@
 from django.db.models import Q
 from django.http import FileResponse
+from drf_spectacular.utils import extend_schema
 from rest_framework import generics, permissions, serializers, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
-from .models import Order, PrintModel
-from .serializers import OrderSerializer, PrintModelSerializer
+from .models import ModelVersion, Order, PrintModel
+from .serializers import (
+    ModelVersionSerializer,
+    ModelVersionUploadSerializer,
+    OrderSerializer,
+    PrintModelSerializer,
+)
 
 
 class PrintModelListCreateView(generics.ListCreateAPIView):
@@ -22,6 +28,84 @@ class PrintModelDetailView(generics.RetrieveDestroyAPIView):
         return PrintModel.objects.filter(owner=self.request.user)
 
 
+class PrintModelVersionListCreateView(generics.ListCreateAPIView):
+    serializer_class = ModelVersionSerializer
+
+    def _get_model(self):
+        is_staff = (
+            getattr(self.request.user, "role", None) in {"manager", "admin"}
+            or self.request.user.is_staff
+            or self.request.user.is_superuser
+        )
+        qs = PrintModel.objects.filter(pk=self.kwargs["pk"])
+        if not is_staff:
+            qs = qs.filter(
+                Q(owner_id=self.request.user.pk)
+                | Q(orders__owner_id=self.request.user.pk)
+            ).distinct()
+        return qs.first()
+
+    def get_queryset(self):
+        model = self._get_model()
+        if model is None:
+            return ModelVersion.objects.none()
+        return model.versions.prefetch_related("validation_results").all()
+
+    def create(self, request, *args, **kwargs):
+        model = PrintModel.objects.filter(
+            pk=self.kwargs["pk"],
+            owner_id=request.user.pk,
+        ).first()
+        if model is None:
+            return Response({"detail": "Модель не найдена."}, status=status.HTTP_404_NOT_FOUND)
+        serializer = ModelVersionUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        version = serializer.create_for_model(model, request.user.pk)
+        return Response(
+            ModelVersionSerializer(version).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+@extend_schema(responses={(200, "application/octet-stream"): bytes})
+@api_view(["GET"])
+@permission_classes([permissions.IsAuthenticated])
+def download_model_version(request, pk: int, version: int):
+    is_staff = (
+        getattr(request.user, "role", None) in {"manager", "admin"}
+        or request.user.is_staff
+        or request.user.is_superuser
+    )
+    if is_staff:
+        model = PrintModel.objects.filter(pk=pk).first()
+    else:
+        model = (
+            PrintModel.objects.filter(pk=pk)
+            .filter(
+                Q(owner_id=request.user.pk)
+                | Q(orders__owner_id=request.user.pk)
+            )
+            .distinct()
+            .first()
+        )
+    if model is None:
+        return Response({"detail": "Модель не найдена."}, status=404)
+    version_obj = model.versions.filter(version=version).first()
+    if version_obj is None:
+        return Response({"detail": "Версия модели не найдена."}, status=404)
+    version_obj.file.open("rb")
+    response = FileResponse(
+        version_obj.file,
+        as_attachment=True,
+        filename=version_obj.file_name,
+    )
+    response["Content-Length"] = version_obj.size_bytes
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+@extend_schema(responses={(200, "application/octet-stream"): bytes})
 @api_view(["GET"])
 @permission_classes([permissions.IsAuthenticated])
 def download_model(request, pk):
@@ -61,6 +145,7 @@ MATERIALS = {
 }
 
 
+@extend_schema(responses={200: None})
 @api_view(["GET"])
 @permission_classes([permissions.IsAuthenticated])
 def materials(request):
@@ -70,6 +155,7 @@ def materials(request):
     ])
 
 
+@extend_schema(request=None, responses={200: None})
 @api_view(["POST"])
 @permission_classes([permissions.IsAuthenticated])
 def calculate_price(request):

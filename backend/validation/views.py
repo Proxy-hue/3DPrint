@@ -1,5 +1,6 @@
 import os
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
@@ -9,6 +10,7 @@ from .serializers import ValidationRequestSerializer
 from .api import SUPPORTED_FORMATS, validate_file
 
 
+@extend_schema(request=ValidationRequestSerializer, responses={200: None, 400: None})
 @api_view(["POST"])
 @permission_classes([permissions.IsAuthenticated])
 def validate_upload(request):
@@ -27,6 +29,7 @@ def validate_upload(request):
     }, status=http_status)
 
 
+@extend_schema(request=None, responses={200: None, 202: None, 404: None, 503: None})
 @api_view(["POST"])
 @permission_classes([permissions.IsAuthenticated])
 def validate_saved_model(request, pk):

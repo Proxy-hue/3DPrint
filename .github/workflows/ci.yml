@@ -7,25 +7,62 @@ on:
     branches: [ "main", "develop" ]
 
 jobs:
-  build:
+  backend:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.12'
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
 
-    # Когда создадитет requirements.txt, эти шаги начнут работать
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt flake8
 
-    - name: Lint with flake8
-      run: |
-        pip install flake8
-        # Останавливаем сборку, если есть синтаксические ошибки Python
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+      - name: Lint with flake8
+        run: |
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Django checks and migrations check
+        working-directory: backend
+        env:
+          USE_SQLITE: 'True'
+          DEBUG: 'False'
+          SECRET_KEY: 'ci-test-secret-key-for-3dprint-validation-checks-2026'
+        run: |
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py spectacular --file /tmp/openapi.yml --validate
+
+      - name: Run pytest test suite
+        working-directory: backend
+        env:
+          USE_SQLITE: 'True'
+          PRIVATE_MODEL_STORAGE_ROOT: /tmp/3dprint_test_media
+        run: |
+          mkdir -p /tmp/3dprint_test_media
+          pytest -v
+
+  frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ARH/package-lock.json
+
+      - name: Install dependencies and build
+        working-directory: ARH
+        run: |
+          npm ci
+          npm run build
