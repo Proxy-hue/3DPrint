@@ -31,9 +31,13 @@ class HealthCheckView(APIView):
         except (OSError, RedisError):
             checks["redis"] = "unavailable"
 
-        overall_status = "ok" if db_ok else "error"
+        overall_status = "ok" if db_ok else "degraded"
         http_status = status.HTTP_200_OK if db_ok else status.HTTP_503_SERVICE_UNAVAILABLE
         return Response(
-            {"status": overall_status, "checks": checks},
+            {
+                "status": overall_status,
+                "db": checks["database"],
+                "checks": checks,
+            },
             status=http_status,
         )

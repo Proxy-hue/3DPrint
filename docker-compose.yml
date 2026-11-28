@@ -1,100 +1,4 @@
 services:
-  nginx:
-    image: nginx:1.27-alpine
-    container_name: 3dprint_nginx
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - static_data:/var/www/static:ro
-    depends_on:
-      - frontend
-      - backend
-    restart: unless-stopped
-
-  frontend:
-    build:
-      context: ./ARH
-      args:
-        VITE_API_URL: ${VITE_API_URL:-}
-    container_name: 3dprint_frontend
-    ports:
-      - "5173:80"
-    depends_on:
-      - backend
-    restart: unless-stopped
-
-  backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    container_name: 3dprint_backend
-    env_file:
-      - .env
-    environment:
-      POSTGRES_HOST: db
-      REDIS_URL: redis://redis:6379/0
-      EMAIL_HOST: ${EMAIL_HOST:-mailpit}
-      EMAIL_PORT: ${EMAIL_PORT:-1025}
-      USE_S3_STORAGE: "true"
-      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-3dprint-models}
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      AWS_S3_ENDPOINT_URL: http://minio:9000
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./backend:/app
-      - static_data:/app/staticfiles
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-    command: >
-      sh -c "python manage.py migrate --noinput &&
-             python manage.py collectstatic --noinput &&
-             gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3 --timeout 120"
-    restart: unless-stopped
-
-  worker:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    container_name: 3dprint_worker
-    env_file:
-      - .env
-    environment:
-      POSTGRES_HOST: db
-      REDIS_URL: redis://redis:6379/0
-      EMAIL_HOST: ${EMAIL_HOST:-mailpit}
-      EMAIL_PORT: ${EMAIL_PORT:-1025}
-      USE_S3_STORAGE: "true"
-      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-3dprint-models}
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      AWS_S3_ENDPOINT_URL: http://minio:9000
-    volumes:
-      - ./backend:/app
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
-      backend:
-        condition: service_started
-    command: python manage.py rqworker default
-    restart: unless-stopped
-
   db:
     image: postgres:16-alpine
     container_name: 3dprint_db
@@ -106,27 +10,27 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-3dprint}"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 5s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: 3dprint_redis
     ports:
       - "6379:6379"
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
+      interval: 5s
+      timeout: 3s
       retries: 5
-    restart: unless-stopped
 
   minio:
-    image: minio/minio:latest
+    image: pgsty/silo:RELEASE.2026-11-12T00-00-00Z
     container_name: 3dprint_minio
     command: server /data --console-address ":9001"
     environment:
@@ -138,34 +42,81 @@ services:
     volumes:
       - minio_data:/data
     restart: unless-stopped
-
-  minio-init:
-    image: minio/mc:latest
-    container_name: 3dprint_minio_init
-    depends_on:
-      - minio
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-3dprint-models}
-    entrypoint:
-      - /bin/sh
-      - -c
-      - >-
-        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
-        && mc ready local; do sleep 2; done;
-        mc mb --ignore-existing "local/$$MINIO_BUCKET_NAME" &&
-        mc anonymous set none "local/$$MINIO_BUCKET_NAME"
+    healthcheck:
+      test: ["CMD", "silo", "healthcheck", "ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   mailpit:
-    image: axllent/mailpit:latest
+    image: axllent/mailpit:v1.20
     container_name: 3dprint_mailpit
     ports:
-      - "1025:1025"
-      - "8025:8025"
+      - "8025:8025" # Веб-интерфейс
+      - "1025:1025" # SMTP порт
+    restart: unless-stopped
+
+  backend:
+    image: 3dprint_backend
+    build: 
+      context: ./backend
+      args:
+        - INSTALL_DEV=true
+    container_name: 3dprint_backend
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  worker:
+    image: 3dprint_backend
+    container_name: 3dprint_worker
+    command: python manage.py rqworker default
+    volumes:
+      - ./backend:/app
+    env_file:
+      - .env
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    container_name: 3dprint_frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_URL=http://localhost:8000/api
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: 3dprint_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend
     restart: unless-stopped
 
 volumes:
   postgres_data:
   minio_data:
-  static_data:

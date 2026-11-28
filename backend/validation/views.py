@@ -5,9 +5,10 @@ from rest_framework import permissions, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 
-from models.api import revalidate_model
-from .serializers import ValidationRequestSerializer
+from models_app.api import revalidate_model
+
 from .api import SUPPORTED_FORMATS, validate_file
+from .serializers import ValidationRequestSerializer
 
 
 @extend_schema(request=ValidationRequestSerializer, responses={200: None, 400: None})
@@ -21,12 +22,26 @@ def validate_upload(request):
 
     http_status = status.HTTP_200_OK if result.valid else status.HTTP_400_BAD_REQUEST
     extension = os.path.splitext(file.name)[1].lower()
-    return Response({
-        "valid": result.valid,
-        "format": SUPPORTED_FORMATS.get(extension),
-        "dimensions": list(result.dimensions_mm) if result.dimensions_mm else None,
-        "errors": [finding.message for finding in result.findings],
-    }, status=http_status)
+    return Response(
+        {
+            "valid": result.valid,
+            "verdict": result.verdict,
+            "format": SUPPORTED_FORMATS.get(extension),
+            "dimensions": list(result.dimensions_mm) if result.dimensions_mm else None,
+            "volume_cm3": result.volume_cm3,
+            "needs_support": result.needs_support,
+            "errors": [finding.message for finding in result.findings],
+            "findings": [
+                {
+                    "code": finding.code,
+                    "severity": finding.severity,
+                    "message": finding.message,
+                }
+                for finding in result.findings
+            ],
+        },
+        status=http_status,
+    )
 
 
 @extend_schema(request=None, responses={200: None, 202: None, 404: None, 503: None})
@@ -43,9 +58,14 @@ def validate_saved_model(request, pk):
         response_status = status.HTTP_202_ACCEPTED
     else:
         response_status = status.HTTP_200_OK
-    return Response({
-        "valid": result.valid,
-        "status": result.status,
-        "dimensions": list(result.dimensions_mm) if result.dimensions_mm else None,
-        "errors": list(result.errors),
-    }, status=response_status)
+    return Response(
+        {
+            "valid": result.valid,
+            "verdict": result.verdict,
+            "status": result.status,
+            "dimensions": list(result.dimensions_mm) if result.dimensions_mm else None,
+            "volume_cm3": result.volume_cm3,
+            "errors": list(result.errors),
+        },
+        status=response_status,
+    )

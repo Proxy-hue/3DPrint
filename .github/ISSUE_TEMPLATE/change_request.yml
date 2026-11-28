@@ -1,0 +1,48 @@
+name: Форма запроса на изменение
+description: Шаблон для оформления запроса на изменение (Bug, Feature, Enhancement).
+title: "[Change Request]: "
+labels: ["change request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо, что нашли время заполнить форму запроса на изменение!
+  - type: input
+    id: title
+    attributes:
+      label: "Название"
+      description: "Краткое описание изменения."
+    validations:
+      required: true
+  - type: dropdown
+    id: type
+    attributes:
+      label: "Тип"
+      description: "Выберите тип изменения."
+      options:
+        - Ошибка (Bug)
+        - Новая функциональность (Feature)
+        - Улучшение (Enhancement)
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: "Описание"
+      description: "В чем суть проблемы или текущего состояния."
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: "Предлагаемое решение"
+      description: "Как должно работать после изменения."
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: "Влияние на треугольник компромиссов"
+      description: "Оценка трудозатрат (человеко-часы) и влияния на сроки."
+    validations:
+      required: true

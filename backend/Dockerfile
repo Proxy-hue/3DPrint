@@ -1,15 +1,26 @@
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# Creating a user
+RUN useradd -m appuser
 
-COPY backend /app
+# Build argument: install only production dependencies by default
+ARG INSTALL_DEV=false
+
+COPY requirements.txt .
+COPY requirements-dev.txt .
+
+# If INSTALL_DEV=true, we install test libraries, otherwise only development
+RUN if [ "$INSTALL_DEV" = "true" ] ; then pip install --no-cache-dir -r requirements-dev.txt ; else pip install --no-cache-dir -r requirements.txt ; fi
+
+COPY . .
+
+RUN chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 8000
-
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "120"]
+CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]

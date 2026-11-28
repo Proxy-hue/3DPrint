@@ -7,51 +7,50 @@ from django.core.mail import send_mail
 from django.middleware.csrf import get_token
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.views.decorators.csrf import ensure_csrf_cookie
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, permissions, status
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from .models import User
 from .serializers import (
     AuthLoginSerializer,
     AuthRegisterSerializer,
-    LoginSerializer,
-    PasswordResetSerializer,
-    RegisterSerializer,
+    PasswordResetConfirmSerializer,
+    PasswordResetRequestSerializer,
     UserSerializer,
 )
 
 
-class RegisterView(generics.CreateAPIView):
-    serializer_class = RegisterSerializer
-    permission_classes = (permissions.AllowAny,)
+def _confirm_password_reset(uid: str, token: str, new_password: str) -> Response:
+    try:
+        user_id = force_str(urlsafe_base64_decode(uid))
+        user = User.objects.filter(pk=user_id, is_active=True).first()
+    except (TypeError, ValueError, OverflowError):
+        user = None
+
+    if user is None or not default_token_generator.check_token(user, token):
+        return Response(
+            {
+                "code": "INVALID_RESET_TOKEN",
+                "message": "Ссылка восстановления недействительна или устарела.",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    user.set_password(new_password)
+    user.save(update_fields=("password", "updated_at"))
+    return Response({"detail": "Пароль успешно обновлён."}, status=status.HTTP_200_OK)
 
 
-class LoginView(TokenObtainPairView):
-    serializer_class = LoginSerializer
-    permission_classes = (permissions.AllowAny,)
-
-
-class RefreshView(TokenRefreshView):
-    permission_classes = (permissions.AllowAny,)
-
-
-class ProfileView(generics.RetrieveUpdateAPIView):
-    serializer_class = UserSerializer
-
-    def get_object(self):
-        return self.request.user
-
-
-class LogoutView(APIView):
-    serializer_class = UserSerializer
-
-    def post(self, request):
-        if getattr(request, "user", None) and request.user.is_authenticated:
-            logout(request)
-        return Response({"detail": "Выход выполнен."}, status=status.HTTP_200_OK)
+@extend_schema(request=None, responses={200: None})
+@api_view(["GET"])
+@permission_classes([permissions.AllowAny])
+@ensure_csrf_cookie
+def csrf_view(request):
+    return Response({"csrfToken": get_token(request)})
 
 
 class AuthRegisterView(APIView):
@@ -63,6 +62,7 @@ class AuthRegisterView(APIView):
         serializer = AuthRegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        login(request, user, backend="django.contrib.auth.backends.ModelBackend")
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
@@ -75,16 +75,10 @@ class AuthLoginView(APIView):
         serializer = AuthLoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        email = (serializer.validated_data.get("email") or "").strip().lower()
-        raw_username = (serializer.validated_data.get("username") or "").strip()
+        email = serializer.validated_data["email"].strip().lower()
         password = serializer.validated_data["password"]
+        credentials = {"username": email}
 
-        lookup_username = raw_username
-        if email and not lookup_username:
-            matched_user = User.objects.filter(email__iexact=email).only("username").first()
-            lookup_username = matched_user.username if matched_user else email
-
-        credentials = {"username": lookup_username}
         if AxesProxyHandler.is_locked(request, credentials=credentials):
             return Response(
                 {
@@ -95,7 +89,7 @@ class AuthLoginView(APIView):
             )
 
         try:
-            user = authenticate(request=request, username=lookup_username, password=password)
+            user = authenticate(request=request, username=email, password=password)
         except AxesBackendPermissionDenied:
             return Response(
                 {
@@ -124,14 +118,9 @@ class AuthLoginView(APIView):
             )
 
         login(request, user)
-        csrf_token = get_token(request)
-        return Response(
-            {
-                "user": UserSerializer(user).data,
-                "csrf_token": csrf_token,
-            },
-            status=status.HTTP_200_OK,
-        )
+        data = UserSerializer(user).data
+        data["csrf_token"] = get_token(request)
+        return Response(data, status=status.HTTP_200_OK)
 
 
 class AuthLogoutView(APIView):
@@ -143,35 +132,30 @@ class AuthLogoutView(APIView):
         return Response({"detail": "Сессия завершена."}, status=status.HTTP_200_OK)
 
 
+class ProfileView(generics.RetrieveUpdateAPIView):
+    serializer_class = UserSerializer
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def get_object(self):
+        return self.request.user
+
+
 class AuthPasswordResetView(APIView):
     permission_classes = (permissions.AllowAny,)
-    serializer_class = PasswordResetSerializer
+    serializer_class = PasswordResetRequestSerializer
 
-    @extend_schema(request=PasswordResetSerializer, responses={200: None})
+    @extend_schema(request=PasswordResetRequestSerializer, responses={200: None})
     def post(self, request):
-        serializer = PasswordResetSerializer(data=request.data)
+        serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
         if data.get("uid") and data.get("token"):
-            try:
-                user_id = force_str(urlsafe_base64_decode(data["uid"]))
-                user = User.objects.filter(pk=user_id, is_active=True).first()
-            except (TypeError, ValueError, OverflowError):
-                user = None
-
-            if user is None or not default_token_generator.check_token(user, data["token"]):
-                return Response(
-                    {
-                        "code": "INVALID_RESET_TOKEN",
-                        "message": "Ссылка восстановления недействительна или устарела.",
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-
-            user.set_password(data["new_password"])
-            user.save(update_fields=("password", "updated_at"))
-            return Response({"detail": "Пароль успешно обновлён."}, status=status.HTTP_200_OK)
+            return _confirm_password_reset(
+                data["uid"],
+                data["token"],
+                data["new_password"],
+            )
 
         email = data["email"].strip().lower()
         user = User.objects.filter(email__iexact=email, is_active=True).first()
@@ -198,3 +182,15 @@ class AuthPasswordResetView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class AuthPasswordResetConfirmView(APIView):
+    permission_classes = (permissions.AllowAny,)
+    serializer_class = PasswordResetConfirmSerializer
+
+    @extend_schema(request=PasswordResetConfirmSerializer, responses={200: None})
+    def post(self, request):
+        serializer = PasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        return _confirm_password_reset(data["uid"], data["token"], data["new_password"])

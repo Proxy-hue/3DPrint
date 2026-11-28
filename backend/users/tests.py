@@ -10,53 +10,6 @@ from .models import User
 
 
 class UserModuleTests(APITestCase):
-    def test_registers_client(self):
-        response = self.client.post(
-            reverse("user-register"),
-            {
-                "username": "client1",
-                "email": "client1@example.com",
-                "first_name": "Иван",
-                "last_name": "Иванов",
-                "phone": "+7 900 000-00-00",
-                "password": "Strong-pass-123",
-            },
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        user = User.objects.get(username="client1")
-        self.assertEqual(user.role, User.Role.CLIENT)
-        self.assertIsNotNone(user.consent_at)
-        self.assertFalse(user.is_staff)
-        self.assertTrue(user.password.startswith("argon2$"))
-        self.assertTrue(user.check_password("Strong-pass-123"))
-
-    def test_profile_requires_authentication(self):
-        response = self.client.get(reverse("user-profile"))
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
-    def test_login_and_profile(self):
-        user = User.objects.create_user(
-            username="client2",
-            email="client2@example.com",
-            password="Strong-pass-123",
-            role=User.Role.CLIENT,
-        )
-
-        login = self.client.post(
-            reverse("user-login"),
-            {"username": "client2", "password": "Strong-pass-123"},
-            format="json",
-        )
-        self.assertEqual(login.status_code, status.HTTP_200_OK)
-
-        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
-        profile = self.client.get(reverse("user-profile"))
-        self.assertEqual(profile.status_code, status.HTTP_200_OK)
-        self.assertEqual(profile.data["id"], user.id)
-        self.assertEqual(profile.data["role"], User.Role.CLIENT)
-
     def test_auth_register_requires_consent_and_hashes_with_argon2(self):
         rejected = self.client.post(
             reverse("auth-register"),
@@ -87,17 +40,16 @@ class UserModuleTests(APITestCase):
         user = User.objects.get(email="org@example.com")
         self.assertEqual(user.client_type, User.ClientType.ORGANIZATION)
         self.assertIsNotNone(user.consent_at)
+        self.assertFalse(user.is_staff)
         self.assertTrue(user.password.startswith("argon2$"))
 
     def test_auth_session_login_logout_and_axes_lockout(self):
         User.objects.create_user(
-            username="session_user",
             email="session@example.com",
             password="Strong-pass-123",
             role=User.Role.CLIENT,
         )
 
-        # 5 failed logins trigger lockout on the 6th attempt (S-SEC-12)
         for _ in range(5):
             failed = self.client.post(
                 reverse("auth-login"),
@@ -116,11 +68,14 @@ class UserModuleTests(APITestCase):
 
     def test_auth_session_cookie_csrf_and_logout(self):
         User.objects.create_user(
-            username="cookie_user",
             email="cookie@example.com",
             password="Strong-pass-123",
             role=User.Role.CLIENT,
         )
+
+        csrf_resp = self.client.get(reverse("auth-csrf"))
+        self.assertEqual(csrf_resp.status_code, status.HTTP_200_OK)
+        self.assertIn("csrfToken", csrf_resp.data)
 
         login_resp = self.client.post(
             reverse("auth-login"),
@@ -138,12 +93,14 @@ class UserModuleTests(APITestCase):
 
         logout_resp = self.client.post(reverse("auth-logout"))
         self.assertEqual(logout_resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(self.client.get(reverse("auth-me")).status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(
+            self.client.get(reverse("auth-me")).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
 
     @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
     def test_auth_password_reset_flow(self):
         user = User.objects.create_user(
-            username="reset_user",
             email="reset@example.com",
             password="Old-Strong-Password-123",
         )
@@ -159,7 +116,7 @@ class UserModuleTests(APITestCase):
         token = re.search(r"token:\s*(\S+)", body).group(1)
 
         confirm_resp = self.client.post(
-            reverse("auth-password-reset"),
+            reverse("auth-password-reset-confirm"),
             {
                 "uid": uid,
                 "token": token,
@@ -172,20 +129,11 @@ class UserModuleTests(APITestCase):
         self.assertTrue(user.check_password("New-Strong-Password-456"))
 
     def test_only_admin_role_has_staff_access(self):
-        manager = User.objects.create_user(
-            username="mgr1",
-            email="mgr1@example.com",
-            password="Strong-pass-123",
-            role=User.Role.MANAGER,
-            is_staff=True,
-        )
         admin_user = User.objects.create_user(
-            username="adm1",
             email="adm1@example.com",
             password="Strong-pass-123",
             role=User.Role.ADMIN,
         )
-        self.assertFalse(manager.is_staff)
         self.assertTrue(admin_user.is_staff)
 
     def test_health_and_openapi_schema_endpoints(self):

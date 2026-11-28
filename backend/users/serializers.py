@@ -1,84 +1,33 @@
 from django.contrib.auth.password_validation import validate_password
 from django.utils import timezone
 from rest_framework import serializers
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from .models import User
 
 
 class UserSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
     full_name = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = (
             "id",
-            "username",
             "email",
+            "role",
+            "full_name",
             "first_name",
             "last_name",
-            "full_name",
             "phone",
             "client_type",
             "company_name",
             "consent_at",
             "is_senior",
-            "role",
         )
-        read_only_fields = ("id", "username", "role", "consent_at", "is_senior", "full_name")
+        read_only_fields = ("id", "email", "role", "consent_at", "is_senior", "full_name")
 
     def get_full_name(self, obj: User) -> str:
-        return obj.get_full_name() or obj.username
-
-
-class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, trim_whitespace=False)
-    consent = serializers.BooleanField(write_only=True, required=False, default=True)
-
-    class Meta:
-        model = User
-        fields = (
-            "id",
-            "username",
-            "email",
-            "first_name",
-            "last_name",
-            "phone",
-            "client_type",
-            "company_name",
-            "consent",
-            "password",
-        )
-        extra_kwargs = {
-            "email": {"required": True},
-            "first_name": {"required": True},
-            "last_name": {"required": True},
-        }
-
-    def validate_password(self, value):
-        validate_password(value)
-        return value
-
-    def validate_email(self, value):
-        email = value.strip().lower()
-        if User.objects.filter(email__iexact=email).exists():
-            raise serializers.ValidationError("Пользователь с таким email уже существует.")
-        return email
-
-    def validate_consent(self, value):
-        if not value:
-            raise serializers.ValidationError("Необходимо согласие на обработку персональных данных.")
-        return value
-
-    def create(self, validated_data):
-        password = validated_data.pop("password")
-        validated_data.pop("consent", True)
-        return User.objects.create_user(
-            password=password,
-            role=User.Role.CLIENT,
-            consent_at=timezone.now(),
-            **validated_data,
-        )
+        return obj.get_full_name() or obj.email
 
 
 class AuthRegisterSerializer(serializers.Serializer):
@@ -119,32 +68,23 @@ class AuthRegisterSerializer(serializers.Serializer):
             parts = full_name.split(None, 1)
             first_name = parts[0]
             last_name = parts[1] if len(parts) > 1 else ""
-        if not first_name:
-            raise serializers.ValidationError({"full_name": "Укажите имя или ФИО."})
         attrs["first_name"] = first_name
         attrs["last_name"] = last_name
-        if attrs.get("client_type") == User.ClientType.ORGANIZATION and not attrs.get("company_name", "").strip():
+        if (
+            attrs.get("client_type") == User.ClientType.ORGANIZATION
+            and not attrs.get("company_name", "").strip()
+        ):
             raise serializers.ValidationError(
                 {"company_name": "Для организации укажите название компании."}
             )
         return attrs
 
     def create(self, validated_data):
-        email = validated_data["email"]
-        base_username = email.split("@", 1)[0][:120] or "client"
-        username = email
-        if len(username) > 150:
-            username = base_username
-        counter = 1
-        while User.objects.filter(username=username).exists():
-            username = f"{base_username}_{counter}"
-            counter += 1
         return User.objects.create_user(
-            username=username,
-            email=email,
+            email=validated_data["email"],
             password=validated_data["password"],
-            first_name=validated_data["first_name"],
-            last_name=validated_data["last_name"],
+            first_name=validated_data.get("first_name", ""),
+            last_name=validated_data.get("last_name", ""),
             phone=validated_data.get("phone", ""),
             client_type=validated_data.get("client_type", User.ClientType.INDIVIDUAL),
             company_name=validated_data.get("company_name", ""),
@@ -154,17 +94,11 @@ class AuthRegisterSerializer(serializers.Serializer):
 
 
 class AuthLoginSerializer(serializers.Serializer):
-    email = serializers.EmailField(required=False)
-    username = serializers.CharField(required=False)
+    email = serializers.EmailField()
     password = serializers.CharField(write_only=True, trim_whitespace=False)
 
-    def validate(self, attrs):
-        if not attrs.get("email") and not attrs.get("username"):
-            raise serializers.ValidationError("Укажите email или username и пароль.")
-        return attrs
 
-
-class PasswordResetSerializer(serializers.Serializer):
+class PasswordResetRequestSerializer(serializers.Serializer):
     email = serializers.EmailField(required=False)
     uid = serializers.CharField(required=False)
     token = serializers.CharField(required=False)
@@ -182,10 +116,11 @@ class PasswordResetSerializer(serializers.Serializer):
         return attrs
 
 
-class LoginSerializer(TokenObtainPairSerializer):
-    @classmethod
-    def get_token(cls, user):
-        token = super().get_token(user)
-        token["role"] = user.role
-        token["email"] = user.email
-        return token
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uid = serializers.CharField()
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate_new_password(self, value):
+        validate_password(value)
+        return value

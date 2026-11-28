@@ -12,7 +12,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from users.models import User
-from models.models import PrintModel
+from models_app.models import PrintModel
 from validation.api import validate_file
 from validation.benchmarks import TYPICAL_BENCHMARK_CASES, calculate_spec_quote
 from validation.contracts import ValidationContext
@@ -67,12 +67,11 @@ def meter_3mf() -> bytes:
 class ValidationTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(
-            username="validator",
             email="validator@example.com",
             password="Strong-pass-123",
         )
         self.client.force_authenticate(self.user)
-        queue_patcher = patch("models.api.django_rq.get_queue")
+        queue_patcher = patch("models_app.api.django_rq.get_queue")
         self.addCleanup(queue_patcher.stop)
         self.queue = queue_patcher.start()
         self.queue.return_value.enqueue.side_effect = (

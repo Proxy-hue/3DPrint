@@ -1,9 +1,10 @@
 from dataclasses import dataclass, field
+from uuid import UUID
 
 
 @dataclass(frozen=True, slots=True)
 class Principal:
-    user_id: int
+    user_id: UUID
     role: str
     permissions: frozenset[str] = field(default_factory=frozenset)
     is_active: bool = True

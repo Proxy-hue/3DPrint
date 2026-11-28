@@ -1,4 +1,8 @@
 .env
+node_modules/
+.vscode
+settings.json
+.flake8
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -63,8 +67,6 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
-/backend/private_models/
-/backend/media/models/
 
 # Flask stuff:
 instance/
