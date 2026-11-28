@@ -10,66 +10,85 @@ from common.permissions import ADMIN, CLIENT, MANAGER
 from .models import User
 
 ROLE_CHOICES = [
-    (CLIENT, 'Клиент'),
-    (MANAGER, 'Менеджер'),
-    (ADMIN, 'Администратор'),
+    (CLIENT, "Клиент"),
+    (MANAGER, "Менеджер"),
+    (ADMIN, "Администратор"),
 ]
 
 
 @admin.register(User)
 class UserAdmin(AdminRoleMixin, AuditMixin, BaseUserAdmin):
-    """Управление пользователями и ролями (F-MGR-11).
+    """Управление пользователями и ролями (F-MGR-11)."""
 
-    * доступ только у роли ADMIN;
-    * удалять пользователей нельзя, их блокируют (история заказов
-      связана с клиентом);
-    * ``is_staff`` выставляется автоматически: вход в админку только
-      у администраторов;
-    * изменения пишутся в журнал аудита (без хеша пароля).
-    """
+    ordering = ["email"]
+    list_display = [
+        "email",
+        "full_name",
+        "role",
+        "client_type",
+        "is_senior",
+        "is_active",
+        "is_staff",
+        "date_joined",
+    ]
+    list_filter = ["role", "client_type", "is_senior", "is_active"]
+    search_fields = ["email", "first_name", "last_name", "phone", "company_name"]
+    actions = ["block_users", "unblock_users"]
 
-    ordering = ['email']
-    list_display = ['email', 'full_name', 'role', 'is_active', 'is_staff',
-                    'date_joined']
-    list_filter = ['role', 'is_active']
-    search_fields = ['email', 'first_name', 'last_name', 'phone',
-                     'company_name']
-    actions = ['block_users', 'unblock_users']
-
-    # Переопределяем fieldsets, так как у нас нет username
     fieldsets = (
-        (None, {'fields': ('email', 'password')}),
-        ('Личные данные', {'fields': ('first_name', 'last_name', 'phone',
-                                      'company_name')}),
-        ('Права', {'fields': ('role',
-                              'is_active',
-                              'is_staff',
-                              'is_superuser',
-                              'groups',
-                              'user_permissions')}),
+        (None, {"fields": ("email", "password")}),
+        (
+            "Личные данные",
+            {
+                "fields": (
+                    "first_name",
+                    "last_name",
+                    "phone",
+                    "client_type",
+                    "company_name",
+                    "consent_at",
+                )
+            },
+        ),
+        (
+            "Права",
+            {
+                "fields": (
+                    "role",
+                    "is_senior",
+                    "is_active",
+                    "is_staff",
+                    "is_superuser",
+                    "groups",
+                    "user_permissions",
+                )
+            },
+        ),
     )
 
     add_fieldsets = (
-        (None, {
-            'classes': ('wide',),
-            'fields': ('email', 'password1', 'password2', 'role'),
-        }),
+        (
+            None,
+            {
+                "classes": ("wide",),
+                "fields": ("email", "password1", "password2", "role", "is_senior"),
+            },
+        ),
     )
 
-    @admin.display(description='Имя')
+    @admin.display(description="Имя")
     def full_name(self, obj):
         return obj.get_full_name()
 
     def formfield_for_dbfield(self, db_field, request, **kwargs):
-        if db_field.name == 'role':
-            return forms.ChoiceField(choices=ROLE_CHOICES, label='Роль')
+        if db_field.name == "role":
+            return forms.ChoiceField(choices=ROLE_CHOICES, label="Роль")
         return super().formfield_for_dbfield(db_field, request, **kwargs)
 
     def get_readonly_fields(self, request, obj=None):
         readonly = tuple(super().get_readonly_fields(request, obj))
         if obj is not None and obj.pk == request.user.pk:
-            # Нельзя лишить себя доступа: роль, активность, суперпользователь.
-            readonly += ('role', 'is_active', 'is_superuser')
+            readonly += ("role", "is_active", "is_superuser")
         return readonly
 
     def save_model(self, request, obj, form, change):
@@ -86,20 +105,20 @@ class UserAdmin(AdminRoleMixin, AuditMixin, BaseUserAdmin):
                 continue
             before = snapshot(user)
             user.is_active = active
-            user.save(update_fields=['is_active'])
-            record(request.user, user, 'UPDATE', before, snapshot(user))
+            user.save(update_fields=["is_active"])
+            record(request.user, user, "UPDATE", before, snapshot(user))
             changed += 1
         self.message_user(
             request,
             f'{"Разблокировано" if active else "Заблокировано"}: {changed}. '
-            f'Свой аккаунт заблокировать нельзя.',
+            f"Свой аккаунт заблокировать нельзя.",
             messages.SUCCESS,
         )
 
-    @admin.action(description='Заблокировать выбранных пользователей')
+    @admin.action(description="Заблокировать выбранных пользователей")
     def block_users(self, request, queryset):
         self._set_active(request, queryset, False)
 
-    @admin.action(description='Разблокировать выбранных пользователей')
+    @admin.action(description="Разблокировать выбранных пользователей")
     def unblock_users(self, request, queryset):
         self._set_active(request, queryset, True)

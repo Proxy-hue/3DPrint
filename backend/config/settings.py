@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 
 import os
 import sys
+from datetime import timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -54,6 +55,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'django_rq',
+    'axes',
 
     'catalog.apps.CatalogConfig',
     'integrations.apps.IntegrationsConfig',
@@ -77,6 +79,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'axes.middleware.AxesMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -152,10 +155,37 @@ USE_TZ = True
 
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / os.getenv('MEDIA_DIR', 'media_private')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+AUTHENTICATION_BACKENDS = [
+    'axes.backends.AxesStandaloneBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+]
+
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+SESSION_COOKIE_AGE = 7 * 24 * 60 * 60
+SESSION_COOKIE_SECURE = os.getenv(
+    'SESSION_COOKIE_SECURE',
+    'False' if DEBUG else 'True',
+).lower() in {'1', 'true', 'yes'}
+CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
+CSRF_COOKIE_SAMESITE = 'Lax'
+
+AXES_FAILURE_LIMIT = 5
+AXES_COOLOFF_TIME = timedelta(minutes=15)
+AXES_LOCKOUT_PARAMETERS = ['username', 'ip_address']
+AXES_RESET_ON_SUCCESS = True
 
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
@@ -167,8 +197,16 @@ REST_FRAMEWORK = {
     'EXCEPTION_HANDLER': 'orders.exceptions.api_exception_handler',
 }
 
+SPECTACULAR_SETTINGS = {
+    'TITLE': '3DPrint API',
+    'DESCRIPTION': 'REST API системы заказа 3D-печати «3DPrint»',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+}
+
 # Runtime settings used by orders / pricing / notifications / payment
 TASKS_SYNC = os.getenv('TASKS_SYNC', 'False').lower() in ('1', 'true', 'yes') or ('pytest' in sys.modules)
+SYNC_VALIDATION_FALLBACK = os.getenv('SYNC_VALIDATION_FALLBACK', 'False').lower() in ('1', 'true', 'yes')
 PAY_STUB_ENABLED = os.getenv('PAY_STUB_ENABLED', 'True').lower() in ('1', 'true', 'yes')
 MAX_UPLOAD_BYTES = int(os.getenv('MAX_UPLOAD_BYTES', 50 * 1024 * 1024))
 MAX_3MF_UNPACKED_BYTES = int(os.getenv('MAX_3MF_UNPACKED_BYTES', 500 * 1024 * 1024))
@@ -181,3 +219,39 @@ RQ_QUEUES = {
         'DB': 0,
     }
 }
+
+USE_S3_STORAGE = os.getenv('USE_S3_STORAGE', 'False').lower() in ('1', 'true', 'yes')
+if USE_S3_STORAGE:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3.S3Storage',
+            'OPTIONS': {
+                'access_key': os.getenv('AWS_ACCESS_KEY_ID', os.getenv('MINIO_ROOT_USER', 'minioadmin')),
+                'secret_key': os.getenv('AWS_SECRET_ACCESS_KEY', os.getenv('MINIO_ROOT_PASSWORD', 'minioadmin')),
+                'bucket_name': os.getenv('MINIO_BUCKET_NAME', '3dprint-models'),
+                'endpoint_url': os.getenv('AWS_S3_ENDPOINT_URL', 'http://minio:9000'),
+                'region_name': os.getenv('AWS_S3_REGION_NAME', 'us-east-1'),
+                'addressing_style': 'path',
+                'signature_version': 's3v4',
+                'default_acl': None,
+                'file_overwrite': False,
+                'querystring_auth': True,
+                'querystring_expire': 300,
+            },
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
+else:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'django.core.files.storage.FileSystemStorage',
+            'OPTIONS': {
+                'location': Path(os.getenv('PRIVATE_MODEL_STORAGE_ROOT', str(MEDIA_ROOT))),
+            },
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }

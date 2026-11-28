@@ -57,6 +57,7 @@ jobs:
       run: |
         cd backend
         python manage.py makemigrations --check --dry-run
+        python manage.py spectacular --file /tmp/openapi.yml
 
     - name: Run tests with pytest
       env:
